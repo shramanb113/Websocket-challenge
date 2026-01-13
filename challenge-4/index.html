@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GoHub Messenger</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app-container">
+      <header class="app-header">
+        <h2 class="app-title">GoHub Messenger</h2>
+        <span id="conn-status" class="status-badge offline">OFFLINE</span>
+      </header>
+
+      <aside class="member-sidebar">
+        <div class="user-list-title">Online Members</div>
+        <div id="user-list-container"></div>
+      </aside>
+
+      <main id="chat-box" class="chat-box" role="log" aria-live="polite"></main>
+
+      <div class="controls">
+        <select id="msgType" title="Message Type">
+          <option value="chat">Public</option>
+          <option value="private">Private</option>
+        </select>
+        <input type="text" id="target" placeholder="Recipient Name" />
+        <input
+          type="text"
+          id="content"
+          placeholder="Type a message..."
+          autocomplete="off"
+        />
+        <button id="sendBtn">Send</button>
+      </div>
+    </div>
+
+    <script>
+      const chatBox = document.getElementById("chat-box");
+      const userList = document.getElementById("user-list-container");
+      const statusBadge = document.getElementById("conn-status");
+      const socket = new WebSocket("ws://localhost:8080/ws");
+
+      socket.onopen = () => {
+        statusBadge.innerText = "ONLINE";
+        statusBadge.classList.remove("offline");
+        statusBadge.classList.add("online");
+      };
+
+      socket.onclose = () => {
+        statusBadge.innerText = "OFFLINE";
+        statusBadge.classList.remove("online");
+        statusBadge.classList.add("offline");
+      };
+
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === "user_list") {
+          const users = JSON.parse(data.content);
+          userList.innerHTML = "";
+          users.forEach((name) => {
+            const div = document.createElement("div");
+            div.className = "user-item";
+            div.innerText = `👤 ${name}`;
+            div.onclick = () => {
+              document.getElementById("target").value = name;
+              document.getElementById("msgType").value = "private";
+            };
+            userList.appendChild(div);
+          });
+          return;
+        }
+
+        const div = document.createElement("div");
+        if (data.type === "system") {
+          div.className = "msg msg-system";
+          div.innerText = data.content;
+        } else {
+          div.className =
+            data.type === "private" ? "msg msg-private" : "msg msg-chat";
+          const label =
+            data.type === "private"
+              ? `[Private from ${data.sender}]`
+              : data.sender;
+          div.innerHTML = `<strong>${label}</strong>: ${data.content}`;
+        }
+
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      };
+
+      function sendMessage() {
+        const contentInput = document.getElementById("content");
+        if (!contentInput.value) return;
+
+        const payload = {
+          type: document.getElementById("msgType").value,
+          target: document.getElementById("target").value,
+          content: contentInput.value,
+        };
+
+        socket.send(JSON.stringify(payload));
+        contentInput.value = "";
+      }
+
+      document.getElementById("sendBtn").onclick = sendMessage;
+      document.getElementById("content").addEventListener("keypress", (e) => {
+        if (e.key === "Enter") sendMessage();
+      });
+    </script>
+  </body>
+</html>
