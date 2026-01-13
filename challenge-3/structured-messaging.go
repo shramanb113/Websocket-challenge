@@ -94,7 +94,7 @@ func (h *Hub) Run() {
 			}
 
 			switch message.Type {
-			case TypeChat:
+			case TypeChat, "user_list", TypeSystem:
 				for _, client := range h.clients {
 					select {
 					case client.send <- payload:
