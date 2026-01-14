@@ -1,0 +1,162 @@
+/* Variables for consistent theming */
+:root {
+  --primary: #007bff;
+  --bg-light: #f4f7f6;
+  --text-dark: #333;
+  --white: #ffffff;
+  --system-gray: #6c757d;
+  --private-yellow: #fff9db;
+  --border-color: #dee2e6;
+  --success: #28a745;
+  --danger: #dc3545;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background-color: var(--bg-light);
+  margin: 0;
+  padding: 20px;
+  color: var(--text-dark);
+}
+
+/* Main Layout */
+.app-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  grid-template-rows: 60px 500px 100px;
+  gap: 10px;
+  background: var(--white);
+  padding: 15px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Header */
+.app-header {
+  grid-column: span 2;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 2px solid var(--bg-light);
+}
+
+.app-title {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.status-badge {
+  font-size: 0.8em;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-weight: bold;
+}
+
+.status-badge.online {
+  background: #d4edda;
+  color: var(--success);
+}
+.status-badge.offline {
+  background: #f8d7da;
+  color: var(--danger);
+}
+
+/* Sidebar */
+.member-sidebar {
+  border-right: 1px solid var(--border-color);
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.user-list-title {
+  font-size: 0.75em;
+  text-transform: uppercase;
+  color: var(--system-gray);
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+  font-weight: bold;
+}
+
+.user-item {
+  padding: 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.2s;
+  font-size: 0.9em;
+}
+
+.user-item:hover {
+  background: var(--bg-light);
+  color: var(--primary);
+}
+
+/* Chat History Area */
+.chat-box {
+  padding: 15px;
+  overflow-y: scroll;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fafafa;
+  border-radius: 4px;
+}
+
+.msg {
+  padding: 10px;
+  border-radius: 8px;
+  max-width: 80%;
+  line-height: 1.4;
+}
+.msg-chat {
+  background: #e9ecef;
+  align-self: flex-start;
+}
+.msg-private {
+  background: var(--private-yellow);
+  border: 1px solid #ffeeba;
+  align-self: flex-start;
+}
+.msg-system {
+  background: transparent;
+  align-self: center;
+  text-align: center;
+  color: var(--system-gray);
+  font-style: italic;
+  font-size: 0.85em;
+}
+
+/* Input Controls */
+.controls {
+  grid-column: span 2;
+  display: grid;
+  grid-template-columns: 120px 150px 1fr 100px;
+  gap: 10px;
+  padding-top: 15px;
+}
+
+input,
+select,
+button {
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 1rem;
+}
+
+button {
+  background: var(--primary);
+  color: white;
+  border: none;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(0.9);
+}
