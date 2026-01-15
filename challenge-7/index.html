@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GoHub | Distributed Messaging Engine</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+  </head>
+  <body>
+    <div class="glass-wrapper">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="logo">G</div>
+          <span>GoHub <small>v1.0</small></span>
+        </div>
+        <div class="sidebar-content">
+          <div class="section-label">System Status</div>
+          <div id="status-card" class="status-card offline">
+            <div class="indicator"></div>
+            <span id="status-text">Disconnect</span>
+          </div>
+
+          <div class="section-label">Active Nodes</div>
+          <div id="user-list" class="user-list"></div>
+        </div>
+      </aside>
+
+      <main class="chat-viewport">
+        <header class="chat-header">
+          <div class="header-info">
+            <i data-lucide="hash"></i>
+            <h3>global-cluster</h3>
+          </div>
+          <div class="header-actions">
+            <i data-lucide="search" aria-label="Search"></i>
+            <i data-lucide="settings" aria-label="Settings"></i>
+          </div>
+        </header>
+
+        <div id="chat-box" class="message-area"></div>
+
+        <footer class="input-area">
+          <div class="input-container">
+            <select
+              id="msgType"
+              class="type-selector"
+              aria-label="Select message scope"
+            >
+              <option value="chat">Public</option>
+              <option value="private">Private</option>
+            </select>
+            <input
+              type="text"
+              id="target"
+              class="target-input"
+              placeholder="Recipient..."
+              hidden
+              aria-label="Recipient username"
+            />
+            <input
+              type="text"
+              id="content"
+              class="main-input"
+              placeholder="Broadcast a message or type /shrug..."
+              autocomplete="off"
+              aria-label="Message content"
+            />
+            <button id="sendBtn" class="send-btn" aria-label="Send message">
+              <i data-lucide="send"></i>
+            </button>
+          </div>
+        </footer>
+      </main>
+    </div>
+
+    <script>
+      lucide.createIcons();
+
+      const chatBox = document.getElementById("chat-box");
+      const userList = document.getElementById("user-list");
+      const statusCard = document.getElementById("status-card");
+      const statusText = document.getElementById("status-text");
+      const msgType = document.getElementById("msgType");
+      const targetInput = document.getElementById("target");
+
+      let socket;
+      let myUsername = "";
+      let watchdogTimer;
+      const HEARTBEAT_TIMEOUT = 65000;
+
+      function connect() {
+        // CLEANUP: If a socket exists, kill it before making a new one
+        if (socket) {
+          socket.onopen = null;
+          socket.onmessage = null;
+          socket.onclose = null;
+          socket.close();
+        }
+
+        socket = new WebSocket("ws://localhost:8080/ws");
+
+        socket.onopen = () => {
+          statusCard.className = "status-card online";
+          statusText.innerText = "Node Active";
+          resetWatchdog();
+        };
+
+        socket.onclose = () => setOfflineUI();
+
+        socket.onmessage = (event) => {
+          resetWatchdog();
+          if (!event.data) return;
+
+          const data = JSON.parse(event.data);
+
+          if (data.type === "user_list") {
+            renderUserList(data.content);
+          } else if (data.type === "system") {
+            // Identity Capture
+            if (data.content.startsWith("Welcome ")) {
+              myUsername = data.content.replace("Welcome ", "");
+            }
+            renderMessage(data);
+          } else {
+            renderMessage(data);
+          }
+        };
+      }
+
+      function resetWatchdog() {
+        clearTimeout(watchdogTimer);
+        watchdogTimer = setTimeout(() => {
+          setOfflineUI();
+          if (socket) socket.close();
+        }, HEARTBEAT_TIMEOUT);
+      }
+
+      function setOfflineUI() {
+        statusCard.className = "status-card offline";
+        statusText.innerText = "Node Offline";
+        userList.innerHTML = "";
+        clearTimeout(watchdogTimer);
+      }
+
+      function renderUserList(content) {
+        const users = JSON.parse(content);
+        userList.innerHTML = "";
+        users.forEach((name) => {
+          const item = document.createElement("div");
+          item.className = "user-item";
+          item.innerHTML = `<div class="user-avatar">${name[0]}</div><span>${name}</span>`;
+          item.onclick = () => {
+            targetInput.value = name;
+            msgType.value = "private";
+            targetInput.hidden = false;
+            document.getElementById("content").focus();
+          };
+          userList.appendChild(item);
+        });
+      }
+
+      function renderMessage(data) {
+        // CRITICAL: Check if sender matches captured username
+        const isSelf = data.sender === myUsername;
+
+        const wrapper = document.createElement("div");
+        wrapper.className = `msg-wrapper ${data.type} ${isSelf ? "self" : ""}`;
+
+        if (data.type === "system") {
+          wrapper.innerHTML = `<div class="sys-msg">${data.content}</div>`;
+        } else {
+          const label =
+            data.type === "private"
+              ? isSelf
+                ? `🔒 Sent to ${data.target}`
+                : `🔒 Private From ${data.sender}`
+              : data.sender;
+
+          wrapper.innerHTML = `
+                <div class="msg-bubble">
+                    <div class="msg-meta">${label}</div>
+                    <div class="msg-content">${data.content}</div>
+                </div>`;
+        }
+
+        chatBox.appendChild(wrapper);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+
+      function sendMessage() {
+        const contentInput = document.getElementById("content");
+        if (!contentInput.value || socket.readyState !== WebSocket.OPEN) return;
+
+        const payload = {
+          type: msgType.value,
+          target: targetInput.value,
+          content: contentInput.value,
+          sender: myUsername, // Identify ourselves to the server
+        };
+
+        socket.send(JSON.stringify(payload));
+        contentInput.value = "";
+      }
+
+      // Reacting to network changes
+      window.addEventListener("offline", () => setOfflineUI());
+      window.addEventListener("online", () => connect());
+
+      msgType.onchange = () => {
+        targetInput.hidden = msgType.value === "chat";
+      };
+      document.getElementById("sendBtn").onclick = sendMessage;
+      document.getElementById("content").onkeypress = (e) => {
+        if (e.key === "Enter") sendMessage();
+      };
+
+      connect();
+    </script>
+  </body>
+</html>
