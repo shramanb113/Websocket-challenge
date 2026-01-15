@@ -98,12 +98,19 @@ func (h *Hub) Run() {
 			return
 
 		case client := <-h.register:
+			if oldClient, ok := h.clients[client.name]; ok {
+				close(oldClient.send)
+				delete(h.clients, client.name)
+			}
+
+			h.clients[client.name] = client
+
 			for _, msg := range h.history {
 				payload, _ := json.Marshal(msg)
 				client.send <- payload
 			}
-			h.clients[client.name] = client
-			fmt.Printf("total connected clients : %d , user joined : %s\n", len(h.clients), client.name)
+
+			fmt.Printf("Total clients: %d | User Joined: %s\n", len(h.clients), client.name)
 			h.broadcastUserList()
 
 		case client := <-h.unregister:
