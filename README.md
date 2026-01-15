@@ -52,6 +52,16 @@
   - **Watchdog Heartbeat:** Added a client-side watchdog timer and `window` event listeners for instant "Offline" UI state transitions.
   - **Compatibility:** Implemented `-webkit-backdrop-filter` polyfills and ARIA labeling for a compliant, premium UI.
 
+### Challenge 7: Atomic Traffic Control (The Gatekeeper)
+
+**Problem Statement:** Protect the server from CPU exhaustion and "Message Flooding" (DDoS) without introducing lock contention.
+**The Struggle:** Traditional rate limiting often uses a `sync.Mutex`, which can become a major bottleneck in high-concurrency environments as goroutines fight for the lock.
+**The Win:** Implemented a high-performance **Atomic Leaky Bucket** rate limiter.
+
+- **Lock-Free Scaling:** Utilized `sync/atomic` with a `CompareAndSwap` loop to manage tokens and timestamps, ensuring thread-safety with near-zero overhead.
+- **Early Rejection Pattern:** Positioned the `limiter.Allow()` check before the expensive `json.Unmarshal` operation. This ensures that malicious or spammy traffic is rejected at the byte level, saving precious CPU cycles.
+- **Lazy Refilling:** Designed the limiter to calculate token refills "on-demand" during the check, rather than running a background timer for every single user, significantly reducing memory footprint.
+
 ---
 
 ## ⚡ Technical Stack
