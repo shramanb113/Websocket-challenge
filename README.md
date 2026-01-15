@@ -73,13 +73,42 @@
 
 ---
 
-##🗺️ The Road Ahead (The Path to 20)
+## 🗺️ The Road Ahead (The Path to 20)
 
-- [x] **Challenge 6:** Reliability & A11y.
-- [ ] **Challenge 7:** Leaky Bucket Rate Limiting (Traffic Smoothing).
-- [ ] **Challenge 8:** Multi-tenancy & Chat Rooms.
-- [ ] **Challenge 15:** Scaling to Multi-Node with Redis Pub/Sub.
-- [ ] **Challenge 20:** Frontend Migration—Evaluating **Next.js** vs **HTMX + Templ**.
+### Phase 1: Core Reliability & Performance
+
+- [x] **Challenge 1:** Core Foundation (Handshake & Handlers).
+- [x] **Challenge 2:** Centralized Hub Pattern (State Management).
+- [x] **Challenge 3:** Non-blocking Backpressure (Slow Consumer Protection).
+- [x] **Challenge 4:** Scalable Command Parsing (Distributed Edge Logic).
+- [x] **Challenge 5:** Presence & Node Visualization (State Synchronization).
+- [x] **Challenge 6:** The "Bulletproof" Sprint (Anti-Zombie Logic & A11y).
+
+### Phase 2: Security & Traffic Control
+
+- [ ] **Challenge 7:** Leaky Bucket Rate Limiting (DDoS & Spam Protection).
+- [ ] **Challenge 8:** Authentication & JWT Integration (Secure Handshaking).
+- [ ] **Challenge 9:** CORS & Origin Validation (Cross-Site Security).
+- [ ] **Challenge 10:** TLS/SSL Integration (WSS Implementation).
+
+### Phase 3: Advanced Messaging Logic
+
+- [ ] **Challenge 11:** Multi-Tenancy (Room-based Isolation).
+- [ ] **Challenge 12:** Message Persistence (Redis/PostgreSQL Integration).
+- [ ] **Challenge 13:** "Message Delivered" & "Seen" Receipts (Acknowledge Logic).
+- [ ] **Challenge 14:** Binary Data Support (File Transfers & Image Previews).
+
+### Phase 4: Horizontal Scaling & Distribution
+
+- [ ] **Challenge 15:** Distributed Pub/Sub (Redis Integration for Multi-Node).
+- [ ] **Challenge 16:** Consistent Hashing (Sticky Session Management).
+- [ ] **Challenge 17:** Prometheus & Grafana Monitoring (Observability).
+- [ ] **Challenge 18:** Dockerization & K8s Readiness (Containerization).
+
+### Phase 5: The Full-Stack Evolution
+
+- [ ] **Challenge 19:** Frontend Migration—Evaluating **Next.js** vs **HTMX + Templ**.
+- [ ] **Challenge 20:** Final Deployment—Blue/Green Deployment on Cloud.
 
 ---
 
