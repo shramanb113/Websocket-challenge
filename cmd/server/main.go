@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/a-h/templ"
-	"github.com/shramanb113/websocket-challenge/views"
+	"websocket-challenge/views"
 )
 
 func main() {

@@ -1,0 +1,27 @@
+# Binaries and Icons
+bin/
+tmp/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Environment Secrets
+.env
+
+# Go Dependencies
+vendor/
+
+# Templ Generated Files
+# Note: Some teams commit these, but since we use 'air' to auto-generate, 
+# keeping the repo clean is often preferred.
+*_templ.go
+
+# OS Specific
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
