@@ -1,0 +1,27 @@
+package views
+
+// Layout is a component that accepts a name parameter
+templ Layout(name string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<title>Templ Demo</title>
+			<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+			<style>
+				body { font-family: sans-serif; background: #121212; color: #efefef; padding: 2rem; }
+				.card { border: 1px solid #444; padding: 1rem; border-radius: 8px; max-width: 400px; }
+				span { color: #00add8; font-weight: bold; }
+			</style>
+		</head>
+		<body>
+			<div class="card">
+				<h1>Hello, <span>{ name }</span>!</h1>
+				<p>This page was rendered using Go + Templ.</p>
+				<button htmx-get="/api/hello" htmx-target="closest div">
+					Click for HTMX Magic
+				</button>
+			</div>
+		</body>
+	</html>
+}
