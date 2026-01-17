@@ -16,6 +16,7 @@ import (
 	"websocket-challenge/internal/middleware"
 	"websocket-challenge/internal/repository"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -25,7 +26,7 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-func serveWS(h *chat.Hub) http.HandlerFunc {
+func serveWS(h *chat.Hub, repo *repository.PostgresUserRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -34,12 +35,26 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 		}
 
 		limiter := middleware.NewRatelimiter(5, 500*time.Millisecond)
+		val := r.Context().Value(middleware.UserIDKey)
+		userID, ok := val.(uuid.UUID)
+		if !ok {
+			log.Println("Context error: UserID not found or not a UUID")
+			return
+		}
+
+		user, err := repo.GetUserByID(r.Context(), userID)
+		if user.Username == "" || err != nil {
+			log.Printf("[WS] Could not find username for ID: %s", userID)
+			conn.WriteMessage(websocket.TextMessage, []byte("Error: User profile not found"))
+			conn.Close()
+			return
+		}
 
 		client := &chat.Client{
 			Hub:     h,
 			Conn:    conn,
 			Send:    make(chan []byte, 256),
-			Name:    generateRandomName(),
+			Name:    user.Username,
 			Limiter: limiter,
 		}
 
@@ -48,10 +63,6 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 		go client.WritePump()
 		go client.ReadPump()
 	}
-}
-
-func generateRandomName() string {
-	return fmt.Sprintf("User_%d", time.Now().UnixNano()%10000)
 }
 
 func main() {
@@ -74,7 +85,7 @@ func main() {
 
 	mux.HandleFunc("POST /signup", http.HandlerFunc(api.SignupHandler(repo)))
 	mux.HandleFunc("POST /login", http.HandlerFunc(api.LoginHandler(repo)))
-	mux.Handle("/ws", authMiddleWare(http.HandlerFunc(serveWS(h))))
+	mux.Handle("/ws", authMiddleWare(http.HandlerFunc(serveWS(h, repo))))
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
