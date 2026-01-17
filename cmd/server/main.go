@@ -66,24 +66,6 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 	}
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
-
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
 func main() {
 
 	cfg := config.Load()
@@ -101,20 +83,22 @@ func main() {
 
 	mux := http.NewServeMux()
 	authMiddleWare := middleware.Authenticate(repo)
-
 	mux.HandleFunc("POST /signup", http.HandlerFunc(api.SignupHandler(repo)))
 	mux.HandleFunc("POST /login", http.HandlerFunc(api.LoginHandler(repo)))
 	mux.Handle("/ws", authMiddleWare(http.HandlerFunc(serveWS(h))))
 	mux.HandleFunc("GET /logout", http.HandlerFunc(api.Logouthandler()))
 
-	handlerWithCORS := corsMiddleware(mux)
+	handlerWithCORS := middleware.CorsMiddleware(mux)
+
+	certFile := "localhost+2.pem"
+	keyFile := "localhost+2-key.pem"
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		fmt.Println("🚀 Modular Server starting on :8080...")
-		if err := http.ListenAndServe(":8080", handlerWithCORS); err != nil {
+		if err := http.ListenAndServeTLS(":8080", certFile, keyFile, handlerWithCORS); err != nil {
 			if err != http.ErrServerClosed {
 				log.Fatalf("ListenAndServe: %v", err)
 			}

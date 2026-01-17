@@ -7,7 +7,7 @@ tmp_dir = "tmp"
 [build]
   args_bin = []
   bin = "tmp\\main.exe"
-  cmd = "templ generate; go build -o ./tmp/main.exe ./cmd/server/main.go"
+  cmd = "go build -o ./tmp/main.exe ./cmd/server/main.go"
   delay = 1000
   entrypoint = ["tmp\\main.exe"]
   exclude_dir = ["assets", "tmp", "vendor", "testdata", "legacy", "static"]
@@ -16,7 +16,7 @@ tmp_dir = "tmp"
   exclude_unchanged = false
   follow_symlink = false
   full_bin = ""
-  include_dir = ["internal","views","cmd"]
+  include_dir = ["internal","cmd"]
   include_ext = ["go", "tpl", "tmpl", "html", "templ"]
   include_file = []
   kill_delay = "0s"

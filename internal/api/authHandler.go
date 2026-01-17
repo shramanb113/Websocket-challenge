@@ -71,9 +71,9 @@ func LoginHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 			Value:    token,
 			Path:     "/",
 			Expires:  time.Now().Add(24 * time.Hour),
-			HttpOnly: true,
-			Secure:   false, // Set true in production
-			SameSite: http.SameSiteLaxMode,
+			HttpOnly: true,                 // Prevents JavaScript access (XSS protection)
+			Secure:   true,                 // REQUIRED: Only sends over HTTPS/WSS
+			SameSite: http.SameSiteLaxMode, // Prevents CSRF while allowing cross-site navigation
 		})
 
 		log.Printf("[LOGIN] Success: User %s logged in", user.Username)
@@ -154,8 +154,9 @@ func SignupHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 			Value:    token,
 			Path:     "/",
 			Expires:  time.Now().Add(24 * time.Hour),
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
+			HttpOnly: true,                 // Prevents JavaScript access (XSS protection)
+			Secure:   true,                 // REQUIRED: Only sends over HTTPS/WSS
+			SameSite: http.SameSiteLaxMode, // Prevents CSRF while allowing cross-site navigation
 		})
 
 		log.Printf("[SIGNUP] Success: New user created: %s", user.Username)
@@ -177,6 +178,7 @@ func Logouthandler() http.HandlerFunc {
 			Expires:  time.Unix(0, 0),
 			HttpOnly: true,
 			MaxAge:   -1,
+			Secure:   true,
 			SameSite: http.SameSiteLaxMode,
 		})
 

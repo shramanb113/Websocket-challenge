@@ -25,3 +25,7 @@ Thumbs.db
 # IDEs
 .vscode/
 .idea/
+
+# SSL Certificates
+*.pem
+*-key.pem
