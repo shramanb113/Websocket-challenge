@@ -168,3 +168,19 @@ func SignupHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 		})
 	}
 }
+
+func Logouthandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "token",
+			Value:    "",
+			Expires:  time.Unix(0, 0),
+			HttpOnly: true,
+			MaxAge:   -1,
+			SameSite: http.SameSiteLaxMode,
+		})
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Logged Out Successfully"))
+	}
+}
