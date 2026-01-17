@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func connect(databaseURL string) (*pgxpool.Pool, error) {
+func Connect(databaseURL string) (*pgxpool.Pool, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 

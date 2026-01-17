@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"websocket-challenge/internal/chat"
+	"websocket-challenge/internal/config"
+	"websocket-challenge/internal/db"
 	"websocket-challenge/internal/middleware"
 
 	"github.com/gorilla/websocket"
@@ -51,6 +53,17 @@ func generateRandomName() string {
 }
 
 func main() {
+
+	cfg := config.Load()
+
+	pool, err := db.Connect(cfg.DatabaseURL)
+
+	if err != nil {
+		log.Fatal("Failed to connect to database:", err)
+		return
+	}
+	defer pool.Close()
+
 	h := chat.NewHub()
 	go h.Run()
 
