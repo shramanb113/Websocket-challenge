@@ -9,10 +9,12 @@ import (
 	"syscall"
 	"time"
 
+	"websocket-challenge/internal/api"
 	"websocket-challenge/internal/chat"
 	"websocket-challenge/internal/config"
 	"websocket-challenge/internal/db"
 	"websocket-challenge/internal/middleware"
+	"websocket-challenge/internal/repository"
 
 	"github.com/gorilla/websocket"
 )
@@ -62,19 +64,24 @@ func main() {
 		log.Fatal("Failed to connect to database:", err)
 		return
 	}
-	defer pool.Close()
+	repo := repository.NewPoolConnection(pool)
 
 	h := chat.NewHub()
 	go h.Run()
 
-	http.HandleFunc("/ws", serveWS(h))
+	mux := http.NewServeMux()
+	authMiddleWare := middleware.Authenticate(repo)
+
+	mux.HandleFunc("POST /signup", http.HandlerFunc(api.SignupHandler(repo)))
+	mux.HandleFunc("POST /login", http.HandlerFunc(api.LoginHandler(repo)))
+	mux.Handle("/ws", authMiddleWare(http.HandlerFunc(serveWS(h))))
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		fmt.Println("🚀 Modular Server starting on :8080...")
-		if err := http.ListenAndServe(":8080", nil); err != nil {
+		if err := http.ListenAndServe(":8080", mux); err != nil {
 			if err != http.ErrServerClosed {
 				log.Fatalf("ListenAndServe: %v", err)
 			}
@@ -82,6 +89,9 @@ func main() {
 	}()
 
 	<-stop
+
+	fmt.Println("📦 Closing database connection pool...")
+	pool.Close()
 
 	fmt.Println("\nShutdown signal received. Cleaning up...")
 	close(h.Quit)
