@@ -52,11 +52,12 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 		}
 
 		client := &chat.Client{
-			Hub:     h,
-			Conn:    conn,
-			Send:    make(chan []byte, 256),
-			Name:    user.Username,
-			Limiter: limiter,
+			Hub:         h,
+			Conn:        conn,
+			Send:        make(chan []byte, 256),
+			Name:        user.Username,
+			Limiter:     limiter,
+			LastWarning: time.Now(),
 		}
 
 		client.Hub.Register <- client

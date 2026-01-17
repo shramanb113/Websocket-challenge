@@ -37,11 +37,12 @@ type Hub struct {
 }
 
 type Client struct {
-	Conn    *websocket.Conn
-	Name    string
-	Send    chan []byte
-	Hub     *Hub
-	Limiter *middleware.RateLimiter
+	Conn        *websocket.Conn
+	Name        string
+	Send        chan []byte
+	Hub         *Hub
+	Limiter     *middleware.RateLimiter
+	LastWarning time.Time
 }
 
 func NewHub() *Hub {

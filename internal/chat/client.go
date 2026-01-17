@@ -67,10 +67,21 @@ func (c *Client) ReadPump() {
 
 		if !c.Limiter.Allow() {
 			log.Printf("[SECURITY] Rate limit triggered for %s. Dropping message.", c.Name)
-			m := &Message{Type: TypeSystem, Sender: "SYSTEM", Content: "⚠️ Rate limit exceeded. Slow down!"}
-			p, _ := json.Marshal(m)
-			c.Send <- p
+
+			if time.Since(c.LastWarning) > 3*time.Second {
+				m := &Message{Type: TypeSystem, Sender: "SYSTEM", Content: "⚠️ Rate limit exceeded. Slow down!"}
+				p, _ := json.Marshal(m)
+
+				select {
+				case c.Send <- p:
+					c.LastWarning = time.Now()
+				default:
+
+				}
+
+			}
 			continue
+
 		}
 
 		payload := &Message{}
