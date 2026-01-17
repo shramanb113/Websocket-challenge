@@ -97,7 +97,7 @@
 ### Phase 2: Security & Traffic Control
 
 - [x] **Challenge 7:** Leaky Bucket Rate Limiting (DDoS & Spam Protection).
-- [ ] **Challenge 8:** Authentication & JWT Integration (Secure Handshaking).
+- [x] **Challenge 8:** Authentication & JWT Integration (Secure Handshaking).
 - [ ] **Challenge 9:** CORS & Origin Validation (Cross-Site Security).
 - [ ] **Challenge 10:** TLS/SSL Integration (WSS Implementation).
 
