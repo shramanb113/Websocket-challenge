@@ -28,17 +28,26 @@ var upgrader = websocket.Upgrader{
 
 func serveWS(h *chat.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Printf("Upgrade error: %v", err)
-			return
-		}
 
 		limiter := middleware.NewRatelimiter(5, 500*time.Millisecond)
 		val := r.Context().Value(middleware.UserIDKey)
 		user, ok := val.(models.User)
 		if !ok {
 			log.Println("Context error: UserID not found or not a UUID")
+			return
+		}
+
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("Upgrade error: %v", err)
+			return
+		}
+
+		if user.IsBanned {
+			message := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "Account disabled")
+			conn.WriteControl(websocket.CloseMessage, message, time.Now().Add(time.Second))
+			time.Sleep(time.Millisecond * 100)
+			conn.Close()
 			return
 		}
 

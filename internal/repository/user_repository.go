@@ -45,7 +45,7 @@ func (r *PostgresUserRepo) CreateUser(ctx context.Context, user *models.User) er
 
 func (r *PostgresUserRepo) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	query := `
-		SELECT id, username, email, password_hash, created_at, updated_at
+		SELECT id, username, email, password_hash, created_at, updated_at,is_banned
 		FROM users
 		WHERE username = $1`
 
@@ -57,6 +57,7 @@ func (r *PostgresUserRepo) GetUserByUsername(ctx context.Context, username strin
 		&user.Password_Hash,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.IsBanned,
 	)
 
 	if err != nil {
@@ -68,7 +69,7 @@ func (r *PostgresUserRepo) GetUserByUsername(ctx context.Context, username strin
 
 func (r *PostgresUserRepo) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
 	query := `
-		SELECT id, username, email, password_hash, created_at, updated_at
+		SELECT id, username, email, password_hash, created_at, updated_at,is_banned
 		FROM users
 		WHERE username = $1`
 
@@ -80,6 +81,7 @@ func (r *PostgresUserRepo) GetUserByEmail(ctx context.Context, email string) (*m
 		&user.Password_Hash,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.IsBanned,
 	)
 
 	if err != nil {
@@ -90,7 +92,7 @@ func (r *PostgresUserRepo) GetUserByEmail(ctx context.Context, email string) (*m
 }
 func (r *PostgresUserRepo) GetUserByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	query := `
-		SELECT id, username, email, password_hash, created_at, updated_at
+		SELECT id, username, email, password_hash, created_at, updated_at,is_baneed
 		FROM users
 		WHERE username = $1`
 
@@ -102,6 +104,7 @@ func (r *PostgresUserRepo) GetUserByID(ctx context.Context, id uuid.UUID) (*mode
 		&user.Password_Hash,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.IsBanned,
 	)
 
 	if err != nil {

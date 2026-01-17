@@ -50,6 +50,12 @@ func Authenticate(repo *repository.PostgresUserRepo) func(http.Handler) http.Han
 				return
 			}
 
+			if user.IsBanned {
+				log.Printf("[SECURITY] Banned user %s attempted access", user.Username)
+				http.Error(w, "Your account has been suspended", http.StatusForbidden) // 403 Forbidden
+				return
+			}
+
 			ctx := context.WithValue(r.Context(), UserIDKey, user)
 
 			log.Printf("[AUTH] User %s authenticated successfully", user.Username)
