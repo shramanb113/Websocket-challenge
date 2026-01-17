@@ -14,9 +14,9 @@ import (
 	"websocket-challenge/internal/config"
 	"websocket-challenge/internal/db"
 	"websocket-challenge/internal/middleware"
+	"websocket-challenge/internal/models"
 	"websocket-challenge/internal/repository"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -26,7 +26,7 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-func serveWS(h *chat.Hub, repo *repository.PostgresUserRepo) http.HandlerFunc {
+func serveWS(h *chat.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -36,17 +36,9 @@ func serveWS(h *chat.Hub, repo *repository.PostgresUserRepo) http.HandlerFunc {
 
 		limiter := middleware.NewRatelimiter(5, 500*time.Millisecond)
 		val := r.Context().Value(middleware.UserIDKey)
-		userID, ok := val.(uuid.UUID)
+		user, ok := val.(models.User)
 		if !ok {
 			log.Println("Context error: UserID not found or not a UUID")
-			return
-		}
-
-		user, err := repo.GetUserByID(r.Context(), userID)
-		if user.Username == "" || err != nil {
-			log.Printf("[WS] Could not find username for ID: %s", userID)
-			conn.WriteMessage(websocket.TextMessage, []byte("Error: User profile not found"))
-			conn.Close()
 			return
 		}
 
@@ -85,7 +77,7 @@ func main() {
 
 	mux.HandleFunc("POST /signup", http.HandlerFunc(api.SignupHandler(repo)))
 	mux.HandleFunc("POST /login", http.HandlerFunc(api.LoginHandler(repo)))
-	mux.Handle("/ws", authMiddleWare(http.HandlerFunc(serveWS(h, repo))))
+	mux.Handle("/ws", authMiddleWare(http.HandlerFunc(serveWS(h))))
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)

@@ -50,7 +50,7 @@ func Authenticate(repo *repository.PostgresUserRepo) func(http.Handler) http.Han
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), UserIDKey, user.ID)
+			ctx := context.WithValue(r.Context(), UserIDKey, user)
 
 			log.Printf("[AUTH] User %s authenticated successfully", user.Username)
 
