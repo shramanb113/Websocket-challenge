@@ -36,6 +36,7 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 			log.Println("Context error: UserID not found or not a UUID")
 			return
 		}
+		fmt.Printf("User %s is connecting to websocket", user.Username)
 
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -84,12 +85,19 @@ func main() {
 	go h.Run()
 
 	mux := http.NewServeMux()
-	authMiddleWare := middleware.Authenticate(repoUser)
-	mux.HandleFunc("POST /signup", http.HandlerFunc(api.SignupHandler(repoUser, repoRefreshToken)))
-	mux.HandleFunc("POST /login", http.HandlerFunc(api.LoginHandler(repoUser, repoRefreshToken)))
-	mux.Handle("/ws", authMiddleWare(http.HandlerFunc(serveWS(h))))
-	mux.HandleFunc("GET /logout", http.HandlerFunc(api.Logouthandler(repoRefreshToken)))
 
+	authMiddleWare := middleware.Authenticate(repoUser)
+
+	// Public Routes
+	mux.HandleFunc("POST /api/auth/signup", api.SignupHandler(repoUser, repoRefreshToken))
+	mux.HandleFunc("POST /api/auth/login", api.LoginHandler(repoUser, repoRefreshToken))
+
+	// The Refresh Route (Must match the cookie path)
+	mux.HandleFunc("POST /api/auth/refresh", api.RefreshHandler(repoRefreshToken, repoUser))
+
+	// Protected Routes
+	mux.HandleFunc("GET /api/auth/logout", api.Logouthandler(repoRefreshToken))
+	mux.Handle("/ws", authMiddleWare(http.HandlerFunc(serveWS(h))))
 	handlerWithCORS := middleware.CorsMiddleware(mux)
 
 	certFile := "localhost+2.pem"

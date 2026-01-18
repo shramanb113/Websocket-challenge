@@ -285,10 +285,11 @@ func Logouthandler(repoRefreshToken *repository.PostgresRefreshTokenRepo) http.H
 		})
 
 		http.SetCookie(w, &http.Cookie{
-			Name:    "refresh_token",
-			Value:   "",
-			Path:    "/api/auth/refresh",
-			Expires: past, MaxAge: -1,
+			Name:     "refresh_token",
+			Value:    "",
+			Path:     "/api/auth/refresh",
+			Expires:  past,
+			MaxAge:   -1,
 			HttpOnly: true,
 			Secure:   true,
 			SameSite: http.SameSiteNoneMode,
@@ -299,6 +300,95 @@ func Logouthandler(repoRefreshToken *repository.PostgresRefreshTokenRepo) http.H
 	}
 }
 
-func RefreshHandler(repoRefreshToken *repository.PostgresRefreshTokenRepo) {
+func RefreshHandler(repoRefreshToken *repository.PostgresRefreshTokenRepo, repouser *repository.PostgresUserRepo) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userAgent := r.UserAgent()
+		ipStr := getIP(r)
+		currentIP := net.ParseIP(ipStr)
 
+		cookie, err := r.Cookie("refresh_token")
+		if err != nil {
+			log.Printf("[AUTH] Refresh attempt failed: Missing cookie (IP: %s)", ipStr)
+			http.Error(w, "Refresh token required", http.StatusUnauthorized)
+			return
+		}
+
+		h := sha256.Sum256([]byte(cookie.Value))
+		tokenHashed := hex.EncodeToString(h[:])
+
+		tokenModel, err := repoRefreshToken.GetTokenByHash(r.Context(), tokenHashed)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				log.Printf("[SECURITY] Potential Token Reuse or Invalid Token: %s (IP: %s)", tokenHashed[:8], ipStr)
+				http.Error(w, "Invalid session", http.StatusUnauthorized)
+				return
+			}
+			log.Printf("[ERROR] Database failure during refresh lookup: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if time.Now().After(tokenModel.ExpiresAt) {
+			log.Printf("[AUTH] Session expired for User: %s", tokenModel.UserID)
+			http.Error(w, "Session expired", http.StatusUnauthorized)
+			return
+		}
+
+		if tokenModel.UserAgent != userAgent || !tokenModel.ClientIP.Equal(currentIP) {
+			log.Printf("[SECURITY ALERT] Context mismatch for User %s. Expected IP: %s, Got: %s",
+				tokenModel.UserID, tokenModel.ClientIP, ipStr)
+
+			http.Error(w, "Security context mismatch", http.StatusUnauthorized)
+			return
+		}
+
+		if err := repoRefreshToken.RevokeToken(r.Context(), tokenModel.ID); err != nil {
+			log.Printf("[ERROR] Failed to rotate token %s: %v", tokenModel.ID, err)
+			http.Error(w, "Could not refresh session", http.StatusInternalServerError)
+			return
+		}
+
+		accessToken, err := auth.GenerateToken(tokenModel.UserID, userAgent, ipStr)
+		if err != nil {
+			log.Printf("[ERROR] JWT Generation error: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		rawRefreshToken, newRefreshModel, err := auth.CreateRefreshToken(tokenModel.UserID, userAgent, ipStr)
+		if err != nil {
+			log.Printf("[ERROR] Refresh string generation error: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := repoRefreshToken.SaveRefreshToken(r.Context(), newRefreshModel); err != nil {
+			log.Printf("[ERROR] Failed to save new refresh token for user %s: %v", tokenModel.UserID, err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "access_token",
+			Value:    accessToken,
+			Path:     "/",
+			Expires:  time.Now().Add(15 * time.Minute),
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteNoneMode,
+		})
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "refresh_token",
+			Value:    rawRefreshToken,
+			Path:     "/api/auth/refresh",
+			Expires:  time.Now().Add(7 * 24 * time.Hour),
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteNoneMode,
+		})
+
+		log.Printf("[AUTH] Session rotated successfully for User: %s", tokenModel.UserID)
+		w.WriteHeader(http.StatusOK)
+	}
 }

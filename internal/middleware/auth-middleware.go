@@ -4,62 +4,73 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
-	"time"
+	"strings"
+
 	"websocket-challenge/internal/auth"
 	"websocket-challenge/internal/repository"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type contextKey string
 
-const UserIDKey contextKey = "userID"
+const UserIDKey contextKey = "user_id"
+
+func getIP(r *http.Request) string {
+	forwarded := r.Header.Get("X-Forwarded-For")
+	if forwarded != "" {
+		return strings.Split(forwarded, ",")[0]
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+		return host
+	}
+	return host
+}
 
 func Authenticate(repo *repository.PostgresUserRepo) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			cookie, err := r.Cookie("token")
+			currentIP := getIP(r)
+			currentUserAgent := r.UserAgent()
+
+			cookie, err := r.Cookie("access_token")
 			if err != nil {
-				if errors.Is(err, http.ErrNoCookie) {
-					log.Println("[AUTH] No token cookie found")
-					http.Error(w, "Authentication required", http.StatusUnauthorized)
-					return
-				}
-				http.Error(w, "Bad request", http.StatusBadRequest)
+				http.Error(w, "Authentication required", http.StatusUnauthorized)
 				return
 			}
 
-			tokenStr := cookie.Value
-
-			claims, err := auth.ValidateToken(tokenStr)
+			claims, err := auth.ValidateToken(cookie.Value)
 			if err != nil {
-				log.Printf("[AUTH] Token validation failed: %v", err)
-				http.Error(w, "Invalid or malformed token", http.StatusUnauthorized)
+				log.Printf("[AUTH] Invalid token from %s: %v", currentIP, err)
+				http.Error(w, "Session expired or invalid", http.StatusUnauthorized)
 				return
 			}
 
-			if claims.ExpiresAt != nil && time.Now().After(claims.ExpiresAt.Time) {
-				log.Printf("[AUTH] Token expired for UserID: %s", claims.UserID)
-				http.Error(w, "Token expired", http.StatusUnauthorized)
+			expectedFingerprint := auth.GenerateFingerprint(currentIP, currentUserAgent)
+			if claims.Fingerprint != expectedFingerprint {
+				log.Printf("[SECURITY ALERT] Fingerprint mismatch! User: %s, Request IP: %s, Cookie IP: %s",
+					claims.UserID, currentIP, r.RemoteAddr)
+				http.Error(w, "Security context violation", http.StatusForbidden)
 				return
 			}
 
 			user, err := repo.GetUserByID(r.Context(), claims.UserID)
 			if err != nil {
-				log.Printf("[AUTH] User in token does not exist in DB: %s", claims.UserID)
-				http.Error(w, "User no longer exists", http.StatusUnauthorized)
-				return
-			}
-
-			if user.IsBanned {
-				log.Printf("[SECURITY] Banned user %s attempted access", user.Username)
-				http.Error(w, "Your account has been suspended", http.StatusForbidden) // 403 Forbidden
+				if errors.Is(err, pgx.ErrNoRows) {
+					log.Printf("[AUTH] Token valid but user no longer exists: %s", claims.UserID)
+					http.Error(w, "User account not found", http.StatusUnauthorized)
+					return
+				}
+				log.Printf("[ERROR] Middleware DB lookup failed: %v", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
 				return
 			}
 
 			ctx := context.WithValue(r.Context(), UserIDKey, user)
-
-			log.Printf("[AUTH] User %s authenticated successfully", user.Username)
-
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
