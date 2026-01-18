@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	tasks "websocket-challenge/internal/Tasks"
 	"websocket-challenge/internal/api"
 	"websocket-challenge/internal/chat"
 	"websocket-challenge/internal/config"
@@ -21,33 +22,36 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  512,
-	WriteBufferSize: 512,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+
+		return origin == "https://localhost:5173"
+	},
 }
 
 func serveWS(h *chat.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-
-		limiter := middleware.NewRatelimiter(5, 500*time.Millisecond)
 		val := r.Context().Value(middleware.UserIDKey)
-		user, ok := val.(models.User)
+		user, ok := val.(*models.User)
 		if !ok {
-			log.Println("Context error: UserID not found or not a UUID")
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		fmt.Printf("User %s is connecting to websocket", user.Username)
 
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Printf("Upgrade error: %v", err)
+			log.Printf("[WS] Upgrade error for %s: %v", user.Username, err)
 			return
 		}
 
 		if user.IsBanned {
-			message := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "Account disabled")
-			conn.WriteControl(websocket.CloseMessage, message, time.Now().Add(time.Second))
-			time.Sleep(time.Millisecond * 100)
+			deadline := time.Now().Add(time.Second)
+			msg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "Account disabled")
+			conn.WriteControl(websocket.CloseMessage, msg, deadline)
+
+			time.Sleep(200 * time.Millisecond)
 			conn.Close()
 			return
 		}
@@ -57,7 +61,7 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 			Conn:        conn,
 			Send:        make(chan []byte, 256),
 			Name:        user.Username,
-			Limiter:     limiter,
+			Limiter:     middleware.NewRatelimiter(5, 500*time.Millisecond),
 			LastWarning: time.Now(),
 		}
 
@@ -80,6 +84,9 @@ func main() {
 	}
 	repoUser := repository.NewPoolConnection(pool)
 	repoRefreshToken := repository.NewRefreshTokenRepo(pool)
+
+	tokenCleaner := tasks.NewTokenCleaner(repoRefreshToken)
+	tokenCleaner.Start()
 
 	h := chat.NewHub()
 	go h.Run()
