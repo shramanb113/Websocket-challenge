@@ -1,18 +1,24 @@
 package auth
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"time"
 	"websocket-challenge/internal/config"
+	"websocket-challenge/internal/models"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
 type CustomClaims struct {
-	UserID uuid.UUID `json:"user_id"`
+	UserID      uuid.UUID `json:"uid"`
+	Fingerprint string    `json:"fpt"`
 	jwt.RegisteredClaims
 }
 
@@ -24,30 +30,24 @@ func getJwtKey() []byte {
 	return []byte(cfg.AuthKey)
 }
 
-func GenerateToken(userId uuid.UUID) (string, error) {
-	expiresAt := time.Now().Add(24 * time.Hour)
-	log.Printf("[AUTH] Generating token for UserID: %s (Expires: %s)", userId, expiresAt.Format(time.RFC3339))
+func GenerateToken(userId uuid.UUID, user_agent string, ipAddress string) (string, error) {
+	now := time.Now()
+	expiresAt := now.Add(15 * time.Minute)
 
 	claims := &CustomClaims{
-		UserID: userId,
+		UserID:      userId,
+		Fingerprint: GenerateFingerprint(user_agent, ipAddress),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "GoHub",
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
-			NotBefore: jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(now.Add(-2 * time.Minute)),
+			Subject:   userId.String(),
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-
-	tokenString, err := token.SignedString(getJwtKey())
-	if err != nil {
-		log.Printf("[AUTH] ERROR: Failed to sign token for user %s: %v", userId, err)
-		return "", err
-	}
-
-	log.Printf("[AUTH] Token successfully generated for UserID: %s", userId)
-	return tokenString, nil
+	return token.SignedString(getJwtKey())
 }
 
 func ValidateToken(tokenString string) (*CustomClaims, error) {
@@ -76,4 +76,40 @@ func ValidateToken(tokenString string) (*CustomClaims, error) {
 
 	log.Printf("[AUTH] VALIDATION FAILED: Token claims invalid or token not valid")
 	return nil, errors.New("invalid token")
+}
+
+func GenerateRandomString(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func GenerateFingerprint(ip, ua string) string {
+	combined := fmt.Sprintf("%s|%s", ip, ua)
+	hash := sha256.Sum256([]byte(combined))
+	return hex.EncodeToString(hash[:])
+}
+
+func CreateRefreshToken(userId uuid.UUID, ip string, userAgent string) (string, *models.RefreshToken, error) {
+	rawToken, err := GenerateRandomString(32)
+	if err != nil {
+		return "", nil, err
+	}
+
+	h := sha256.New()
+	h.Write([]byte(rawToken))
+	hashedToken := hex.EncodeToString(h.Sum(nil))
+
+	tokenModel := &models.RefreshToken{
+		UserID:      userId,
+		TokenHashed: hashedToken,
+		UserAgent:   userAgent,
+		ClientIP:    net.ParseIP(ip),
+		ExpiresAt:   time.Now().Add(7 * 24 * time.Hour),
+	}
+
+	return rawToken, tokenModel, nil
+
 }

@@ -1,9 +1,12 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Helper to validate email format
@@ -23,9 +27,25 @@ func isValidEmail(email string) bool {
 	return err == nil
 }
 
-func LoginHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
+func getIP(r *http.Request) string {
+	forwarded := r.Header.Get("X-Forwarded-For")
+	if forwarded != "" {
+		return strings.Split(forwarded, ",")[0]
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+		return host
+	}
+	return host
+}
+
+func LoginHandler(repoUser *repository.PostgresUserRepo, repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload types.LoginRequest
+
+		userAgent := r.UserAgent()
+		ip := getIP(r)
 
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			log.Printf("[LOGIN] Decode error: %v", err)
@@ -33,7 +53,6 @@ func LoginHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 			return
 		}
 
-		// Edge Case: Empty strings
 		payload.Username = strings.TrimSpace(payload.Username)
 		if payload.Username == "" || payload.Password == "" {
 			log.Println("[LOGIN] Attempt with empty username or password")
@@ -41,7 +60,7 @@ func LoginHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 			return
 		}
 
-		user, err := repo.GetUserByUsername(r.Context(), payload.Username)
+		user, err := repoUser.GetUserByUsername(r.Context(), payload.Username)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				log.Printf("[LOGIN] User not found: %s", payload.Username)
@@ -59,21 +78,52 @@ func LoginHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 			return
 		}
 
-		token, err := auth.GenerateToken(user.ID)
+		token, err := auth.GenerateToken(user.ID, userAgent, ip)
 		if err != nil {
-			log.Printf("[LOGIN] Token generation failed for %s: %v", user.ID, err)
+			log.Printf("[LOGIN] Access Token generation failed for %s: %v", user.ID, err)
 			http.Error(w, "Failed to create session", http.StatusInternalServerError)
 			return
 		}
 
+		refreshToken, refreshTokenModel, err := auth.CreateRefreshToken(user.ID, userAgent, ip)
+
+		if err != nil {
+			log.Printf("[LOGIN] Refresh Token generation failed for %s: %v", user.ID, err)
+			http.Error(w, "Failed to create session", http.StatusInternalServerError)
+			return
+		}
+
+		err = repoRefreshToken.SaveRefreshToken(r.Context(), refreshTokenModel)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				log.Printf("[LOGIN] Postgres Error: Code %s, Message: %s", pgErr.Code, pgErr.Message)
+			} else {
+				log.Printf("[LOGIN] Unknown Database Error: %v", err)
+			}
+
+			http.Error(w, "Failed to initialize session", http.StatusInternalServerError)
+			return
+		}
+
 		http.SetCookie(w, &http.Cookie{
-			Name:     "token",
+			Name:     "access_token",
 			Value:    token,
 			Path:     "/",
-			Expires:  time.Now().Add(24 * time.Hour),
-			HttpOnly: true,                 // Prevents JavaScript access (XSS protection)
-			Secure:   true,                 // REQUIRED: Only sends over HTTPS/WSS
-			SameSite: http.SameSiteLaxMode, // Prevents CSRF while allowing cross-site navigation
+			Expires:  time.Now().Add(15 * time.Minute),
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteNoneMode,
+		})
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "refresh_token",
+			Value:    refreshToken,
+			Path:     "/api/auth/refresh",
+			Expires:  time.Now().Add(7 * 24 * time.Hour),
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteNoneMode,
 		})
 
 		log.Printf("[LOGIN] Success: User %s logged in", user.Username)
@@ -86,9 +136,13 @@ func LoginHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 	}
 }
 
-func SignupHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
+func SignupHandler(repoUser *repository.PostgresUserRepo, repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload types.RegisterRequest
+
+		userAgent := r.UserAgent()
+		ip := getIP(r)
+
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			log.Printf("[SIGNUP] Decode error: %v", err)
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -115,9 +169,14 @@ func SignupHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 			return
 		}
 
-		if _, err := repo.GetUserByUsername(r.Context(), payload.Username); err == nil {
+		if _, err := repoUser.GetUserByUsername(r.Context(), payload.Username); err == nil {
 			log.Printf("[SIGNUP] Conflict: Username %s already exists", payload.Username)
 			http.Error(w, "Username already taken", http.StatusConflict)
+			return
+		}
+		if _, err := repoUser.GetUserByEmail(r.Context(), payload.Email); err == nil {
+			log.Printf("[SIGNUP] Conflict: Email %s already exists", payload.Email)
+			http.Error(w, "Email already exists", http.StatusConflict)
 			return
 		}
 
@@ -136,27 +195,57 @@ func SignupHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 			CreatedAt:     time.Now(),
 		}
 
-		if err := repo.CreateUser(r.Context(), user); err != nil {
+		if err := repoUser.CreateUser(r.Context(), user); err != nil {
 			log.Printf("[SIGNUP] DB Create error for %s: %v", payload.Username, err)
 			http.Error(w, "Failed to create user", http.StatusInternalServerError)
 			return
 		}
 
-		token, err := auth.GenerateToken(user.ID)
+		token, err := auth.GenerateToken(user.ID, r.UserAgent(), getIP(r))
 		if err != nil {
 			log.Printf("[SIGNUP] Token generation failed: %v", err)
 			http.Error(w, "User created, but failed to start session. Please login.", http.StatusCreated)
 			return
 		}
 
+		refreshToken, refreshTokenModel, err := auth.CreateRefreshToken(user.ID, userAgent, ip)
+		if err != nil {
+			log.Printf("[LOGIN] Refresh Token generation failed for %s: %v", user.ID, err)
+			http.Error(w, "Failed to create session", http.StatusInternalServerError)
+			return
+		}
+
+		err = repoRefreshToken.SaveRefreshToken(r.Context(), refreshTokenModel)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				log.Printf("[LOGIN] Postgres Error: Code %s, Message: %s", pgErr.Code, pgErr.Message)
+			} else {
+				log.Printf("[LOGIN] Unknown Database Error: %v", err)
+			}
+
+			http.Error(w, "Failed to initialize session", http.StatusInternalServerError)
+			return
+		}
+
 		http.SetCookie(w, &http.Cookie{
-			Name:     "token",
+			Name:     "access_token",
 			Value:    token,
 			Path:     "/",
-			Expires:  time.Now().Add(24 * time.Hour),
-			HttpOnly: true,                 // Prevents JavaScript access (XSS protection)
-			Secure:   true,                 // REQUIRED: Only sends over HTTPS/WSS
-			SameSite: http.SameSiteLaxMode, // Prevents CSRF while allowing cross-site navigation
+			Expires:  time.Now().Add(15 * time.Minute),
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteNoneMode,
+		})
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "refresh_token",
+			Value:    refreshToken,
+			Path:     "/api/auth/refresh",
+			Expires:  time.Now().Add(7 * 24 * time.Hour),
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteNoneMode,
 		})
 
 		log.Printf("[SIGNUP] Success: New user created: %s", user.Username)
@@ -170,19 +259,46 @@ func SignupHandler(repo *repository.PostgresUserRepo) http.HandlerFunc {
 	}
 }
 
-func Logouthandler() http.HandlerFunc {
+func Logouthandler(repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("refresh_token")
+
+		if err == nil {
+			valBytes := sha256.Sum256([]byte(cookie.Value))
+			tokenhashed := hex.EncodeToString(valBytes[:])
+
+			token, err := repoRefreshToken.GetTokenByHash(r.Context(), tokenhashed)
+			if err == nil {
+				_ = repoRefreshToken.RevokeToken(r.Context(), token.ID)
+			}
+		}
+		past := time.Unix(0, 0)
+
 		http.SetCookie(w, &http.Cookie{
-			Name:     "token",
-			Value:    "",
-			Expires:  time.Unix(0, 0),
-			HttpOnly: true,
+			Name:  "access_token",
+			Value: "", Path: "/",
+			Expires:  past,
 			MaxAge:   -1,
+			HttpOnly: true,
 			Secure:   true,
-			SameSite: http.SameSiteLaxMode,
+			SameSite: http.SameSiteNoneMode,
+		})
+
+		http.SetCookie(w, &http.Cookie{
+			Name:    "refresh_token",
+			Value:   "",
+			Path:    "/api/auth/refresh",
+			Expires: past, MaxAge: -1,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteNoneMode,
 		})
 
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Logged Out Successfully"))
 	}
+}
+
+func RefreshHandler(repoRefreshToken *repository.PostgresRefreshTokenRepo) {
+
 }

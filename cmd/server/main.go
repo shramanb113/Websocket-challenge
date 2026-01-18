@@ -77,17 +77,18 @@ func main() {
 		log.Fatal("Failed to connect to database:", err)
 		return
 	}
-	repo := repository.NewPoolConnection(pool)
+	repoUser := repository.NewPoolConnection(pool)
+	repoRefreshToken := repository.NewRefreshTokenRepo(pool)
 
 	h := chat.NewHub()
 	go h.Run()
 
 	mux := http.NewServeMux()
-	authMiddleWare := middleware.Authenticate(repo)
-	mux.HandleFunc("POST /signup", http.HandlerFunc(api.SignupHandler(repo)))
-	mux.HandleFunc("POST /login", http.HandlerFunc(api.LoginHandler(repo)))
+	authMiddleWare := middleware.Authenticate(repoUser)
+	mux.HandleFunc("POST /signup", http.HandlerFunc(api.SignupHandler(repoUser, repoRefreshToken)))
+	mux.HandleFunc("POST /login", http.HandlerFunc(api.LoginHandler(repoUser, repoRefreshToken)))
 	mux.Handle("/ws", authMiddleWare(http.HandlerFunc(serveWS(h))))
-	mux.HandleFunc("GET /logout", http.HandlerFunc(api.Logouthandler()))
+	mux.HandleFunc("GET /logout", http.HandlerFunc(api.Logouthandler(repoRefreshToken)))
 
 	handlerWithCORS := middleware.CorsMiddleware(mux)
 
