@@ -31,7 +31,7 @@ func getIP(r *http.Request) string {
 	return host
 }
 
-func Authenticate(repo *repository.PostgresUserRepo) func(http.Handler) http.Handler {
+func Authenticate(repo repository.UserRepository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			currentIP := getIP(r)

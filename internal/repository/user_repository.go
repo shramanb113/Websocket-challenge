@@ -11,7 +11,7 @@ import (
 
 type UserRepository interface {
 	CreateUser(ctx context.Context, user *models.User) error
-	GetUserByUserName(ctx context.Context, userName string) (*models.User, error)
+	GetUserByUsername(ctx context.Context, username string) (*models.User, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (*models.User, error)
 }
@@ -20,14 +20,14 @@ type PostgresUserRepo struct {
 	pool *pgxpool.Pool
 }
 
-func NewPoolConnection(pool *pgxpool.Pool) *PostgresUserRepo {
+func NewPoolConnection(pool *pgxpool.Pool) UserRepository {
 	return &PostgresUserRepo{
 		pool: pool,
 	}
 }
 
 func (r *PostgresUserRepo) CreateUser(ctx context.Context, user *models.User) error {
-	const query = `INSERT INTO users (id, username, email, password_hash) VALUES ($1,$2,$3,$4) RETURNING  username ,created_at,updated_at `
+	const query = `INSERT INTO users (id, username, email, password_hash) VALUES ($1,$2,$3,$4) RETURNING username, created_at, updated_at`
 	err := r.pool.QueryRow(ctx, query,
 		user.ID,
 		user.Username,
@@ -40,12 +40,11 @@ func (r *PostgresUserRepo) CreateUser(ctx context.Context, user *models.User) er
 	}
 
 	return nil
-
 }
 
 func (r *PostgresUserRepo) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	query := `
-		SELECT id, username, email, password_hash, created_at, updated_at,is_banned
+		SELECT id, username, email, password_hash, created_at, updated_at, is_banned
 		FROM users
 		WHERE username = $1`
 
@@ -61,7 +60,7 @@ func (r *PostgresUserRepo) GetUserByUsername(ctx context.Context, username strin
 	)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to find user: %w", err)
+		return nil, fmt.Errorf("failed to find user by username: %w", err)
 	}
 
 	return user, nil
@@ -69,9 +68,9 @@ func (r *PostgresUserRepo) GetUserByUsername(ctx context.Context, username strin
 
 func (r *PostgresUserRepo) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
 	query := `
-		SELECT id, username, email, password_hash, created_at, updated_at,is_banned
+		SELECT id, username, email, password_hash, created_at, updated_at, is_banned
 		FROM users
-		WHERE username = $1`
+		WHERE email = $1` // FIXED: Was username = $1
 
 	user := &models.User{}
 	err := r.pool.QueryRow(ctx, query, email).Scan(
@@ -85,16 +84,17 @@ func (r *PostgresUserRepo) GetUserByEmail(ctx context.Context, email string) (*m
 	)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to find user: %w", err)
+		return nil, fmt.Errorf("failed to find user by email: %w", err)
 	}
 
 	return user, nil
 }
+
 func (r *PostgresUserRepo) GetUserByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	query := `
-		SELECT id, username, email, password_hash, created_at, updated_at,is_baneed
+		SELECT id, username, email, password_hash, created_at, updated_at, is_banned
 		FROM users
-		WHERE username = $1`
+		WHERE id = $1` // FIXED: Was username = $1 and column typo is_baneed
 
 	user := &models.User{}
 	err := r.pool.QueryRow(ctx, query, id).Scan(
@@ -108,7 +108,7 @@ func (r *PostgresUserRepo) GetUserByID(ctx context.Context, id uuid.UUID) (*mode
 	)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to find user: %w", err)
+		return nil, fmt.Errorf("failed to find user by ID: %w", err)
 	}
 
 	return user, nil

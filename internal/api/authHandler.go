@@ -40,7 +40,7 @@ func getIP(r *http.Request) string {
 	return host
 }
 
-func LoginHandler(repoUser *repository.PostgresUserRepo, repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
+func LoginHandler(repoUser repository.UserRepository, repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload types.LoginRequest
 
@@ -136,7 +136,7 @@ func LoginHandler(repoUser *repository.PostgresUserRepo, repoRefreshToken *repos
 	}
 }
 
-func SignupHandler(repoUser *repository.PostgresUserRepo, repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
+func SignupHandler(repoUser repository.UserRepository, repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload types.RegisterRequest
 
@@ -300,7 +300,7 @@ func Logouthandler(repoRefreshToken *repository.PostgresRefreshTokenRepo) http.H
 	}
 }
 
-func RefreshHandler(repoRefreshToken *repository.PostgresRefreshTokenRepo, repouser *repository.PostgresUserRepo) http.HandlerFunc {
+func RefreshHandler(repoRefreshToken *repository.PostgresRefreshTokenRepo, repouser repository.UserRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userAgent := r.UserAgent()
 		ipStr := getIP(r)
