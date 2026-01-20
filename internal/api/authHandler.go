@@ -40,7 +40,7 @@ func getIP(r *http.Request) string {
 	return host
 }
 
-func LoginHandler(repoUser repository.UserRepository, repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
+func LoginHandler(repoUser repository.UserRepository, repoRefreshToken repository.RefreshTokenRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload types.LoginRequest
 
@@ -136,7 +136,7 @@ func LoginHandler(repoUser repository.UserRepository, repoRefreshToken *reposito
 	}
 }
 
-func SignupHandler(repoUser repository.UserRepository, repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
+func SignupHandler(repoUser repository.UserRepository, repoRefreshToken repository.RefreshTokenRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload types.RegisterRequest
 
@@ -259,7 +259,7 @@ func SignupHandler(repoUser repository.UserRepository, repoRefreshToken *reposit
 	}
 }
 
-func Logouthandler(repoRefreshToken *repository.PostgresRefreshTokenRepo) http.HandlerFunc {
+func Logouthandler(repoRefreshToken repository.RefreshTokenRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("refresh_token")
 
@@ -300,7 +300,7 @@ func Logouthandler(repoRefreshToken *repository.PostgresRefreshTokenRepo) http.H
 	}
 }
 
-func RefreshHandler(repoRefreshToken *repository.PostgresRefreshTokenRepo, repouser repository.UserRepository) http.HandlerFunc {
+func RefreshHandler(repoRefreshToken repository.RefreshTokenRepository, repouser repository.UserRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userAgent := r.UserAgent()
 		ipStr := getIP(r)

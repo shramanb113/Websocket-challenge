@@ -10,10 +10,10 @@ import (
 )
 
 type TokenCleaner struct {
-	repo *repository.PostgresRefreshTokenRepo
+	repo repository.RefreshTokenRepository
 }
 
-func NewTokenCleaner(repo *repository.PostgresRefreshTokenRepo) *TokenCleaner {
+func NewTokenCleaner(repo repository.RefreshTokenRepository) *TokenCleaner {
 	return &TokenCleaner{
 		repo: repo,
 	}

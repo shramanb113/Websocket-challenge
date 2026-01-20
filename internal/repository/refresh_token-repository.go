@@ -26,7 +26,7 @@ type PostgresRefreshTokenRepo struct {
 	pool *pgxpool.Pool
 }
 
-func NewRefreshTokenRepo(pool *pgxpool.Pool) *PostgresRefreshTokenRepo {
+func NewRefreshTokenRepo(pool *pgxpool.Pool) RefreshTokenRepository {
 	return &PostgresRefreshTokenRepo{
 		pool: pool,
 	}
