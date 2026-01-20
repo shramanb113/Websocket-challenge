@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -47,6 +48,10 @@ func LoginHandler(repoUser repository.UserRepository, repoRefreshToken repositor
 		userAgent := r.UserAgent()
 		ip := getIP(r)
 
+		dbctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+
+		defer cancel()
+
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			log.Printf("[LOGIN] Decode error: %v", err)
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -60,7 +65,7 @@ func LoginHandler(repoUser repository.UserRepository, repoRefreshToken repositor
 			return
 		}
 
-		user, err := repoUser.GetUserByUsername(r.Context(), payload.Username)
+		user, err := repoUser.GetUserByUsername(dbctx, payload.Username)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				log.Printf("[LOGIN] User not found: %s", payload.Username)
@@ -93,7 +98,7 @@ func LoginHandler(repoUser repository.UserRepository, repoRefreshToken repositor
 			return
 		}
 
-		err = repoRefreshToken.SaveRefreshToken(r.Context(), refreshTokenModel)
+		err = repoRefreshToken.SaveRefreshToken(dbctx, refreshTokenModel)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
@@ -143,6 +148,10 @@ func SignupHandler(repoUser repository.UserRepository, repoRefreshToken reposito
 		userAgent := r.UserAgent()
 		ip := getIP(r)
 
+		dbctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+
+		defer cancel()
+
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			log.Printf("[SIGNUP] Decode error: %v", err)
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -169,14 +178,21 @@ func SignupHandler(repoUser repository.UserRepository, repoRefreshToken reposito
 			return
 		}
 
-		if _, err := repoUser.GetUserByUsername(r.Context(), payload.Username); err == nil {
-			log.Printf("[SIGNUP] Conflict: Username %s already exists", payload.Username)
+		existingUser, err := repoUser.GetUserByUsername(dbctx, payload.Username)
+		if err == nil && existingUser != nil {
 			http.Error(w, "Username already taken", http.StatusConflict)
 			return
+		} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
-		if _, err := repoUser.GetUserByEmail(r.Context(), payload.Email); err == nil {
-			log.Printf("[SIGNUP] Conflict: Email %s already exists", payload.Email)
+
+		existingEmail, err := repoUser.GetUserByEmail(dbctx, payload.Email)
+		if err == nil && existingEmail != nil {
 			http.Error(w, "Email already exists", http.StatusConflict)
+			return
+		} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
@@ -195,7 +211,7 @@ func SignupHandler(repoUser repository.UserRepository, repoRefreshToken reposito
 			CreatedAt:     time.Now(),
 		}
 
-		if err := repoUser.CreateUser(r.Context(), user); err != nil {
+		if err := repoUser.CreateUser(dbctx, user); err != nil {
 			log.Printf("[SIGNUP] DB Create error for %s: %v", payload.Username, err)
 			http.Error(w, "Failed to create user", http.StatusInternalServerError)
 			return
@@ -215,7 +231,7 @@ func SignupHandler(repoUser repository.UserRepository, repoRefreshToken reposito
 			return
 		}
 
-		err = repoRefreshToken.SaveRefreshToken(r.Context(), refreshTokenModel)
+		err = repoRefreshToken.SaveRefreshToken(dbctx, refreshTokenModel)
 		if err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
@@ -262,14 +278,17 @@ func SignupHandler(repoUser repository.UserRepository, repoRefreshToken reposito
 func Logouthandler(repoRefreshToken repository.RefreshTokenRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("refresh_token")
+		dbctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+
+		defer cancel()
 
 		if err == nil {
 			valBytes := sha256.Sum256([]byte(cookie.Value))
 			tokenhashed := hex.EncodeToString(valBytes[:])
 
-			token, err := repoRefreshToken.GetTokenByHash(r.Context(), tokenhashed)
+			token, err := repoRefreshToken.GetTokenByHash(dbctx, tokenhashed)
 			if err == nil {
-				_ = repoRefreshToken.RevokeToken(r.Context(), token.ID)
+				_ = repoRefreshToken.RevokeToken(dbctx, token.ID)
 			}
 		}
 		past := time.Unix(0, 0)
@@ -306,6 +325,10 @@ func RefreshHandler(repoRefreshToken repository.RefreshTokenRepository, repouser
 		ipStr := getIP(r)
 		currentIP := net.ParseIP(ipStr)
 
+		dbctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+
+		defer cancel()
+
 		cookie, err := r.Cookie("refresh_token")
 		if err != nil {
 			log.Printf("[AUTH] Refresh attempt failed: Missing cookie (IP: %s)", ipStr)
@@ -316,7 +339,7 @@ func RefreshHandler(repoRefreshToken repository.RefreshTokenRepository, repouser
 		h := sha256.Sum256([]byte(cookie.Value))
 		tokenHashed := hex.EncodeToString(h[:])
 
-		tokenModel, err := repoRefreshToken.GetTokenByHash(r.Context(), tokenHashed)
+		tokenModel, err := repoRefreshToken.GetTokenByHash(dbctx, tokenHashed)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				log.Printf("[SECURITY] Potential Token Reuse or Invalid Token: %s (IP: %s)", tokenHashed[:8], ipStr)
@@ -342,7 +365,7 @@ func RefreshHandler(repoRefreshToken repository.RefreshTokenRepository, repouser
 			return
 		}
 
-		if err := repoRefreshToken.RevokeToken(r.Context(), tokenModel.ID); err != nil {
+		if err := repoRefreshToken.RevokeToken(dbctx, tokenModel.ID); err != nil {
 			log.Printf("[ERROR] Failed to rotate token %s: %v", tokenModel.ID, err)
 			http.Error(w, "Could not refresh session", http.StatusInternalServerError)
 			return
@@ -362,7 +385,7 @@ func RefreshHandler(repoRefreshToken repository.RefreshTokenRepository, repouser
 			return
 		}
 
-		if err := repoRefreshToken.SaveRefreshToken(r.Context(), newRefreshModel); err != nil {
+		if err := repoRefreshToken.SaveRefreshToken(dbctx, newRefreshModel); err != nil {
 			log.Printf("[ERROR] Failed to save new refresh token for user %s: %v", tokenModel.UserID, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return

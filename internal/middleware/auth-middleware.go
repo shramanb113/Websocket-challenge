@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"websocket-challenge/internal/auth"
 	"websocket-challenge/internal/repository"
@@ -58,8 +59,16 @@ func Authenticate(repo repository.UserRepository) func(http.Handler) http.Handle
 				return
 			}
 
-			user, err := repo.GetUserByID(r.Context(), claims.UserID)
+			dbCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			user, err := repo.GetUserByID(dbCtx, claims.UserID)
+
 			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					log.Printf("[AUTH] DB Timeout during auth check for user %s", claims.UserID)
+					http.Error(w, "Service temporary unavailable", http.StatusServiceUnavailable)
+					return
+				}
 				if errors.Is(err, pgx.ErrNoRows) {
 					log.Printf("[AUTH] Token valid but user no longer exists: %s", claims.UserID)
 					http.Error(w, "User account not found", http.StatusUnauthorized)
@@ -67,6 +76,11 @@ func Authenticate(repo repository.UserRepository) func(http.Handler) http.Handle
 				}
 				log.Printf("[ERROR] Middleware DB lookup failed: %v", err)
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			if user.IsBanned {
+				http.Error(w, "Account disabled", http.StatusForbidden)
 				return
 			}
 
