@@ -124,11 +124,11 @@ func main() {
 
 	<-stop
 
-	fmt.Println("📦 Closing database connection pool...")
-	pool.Close()
-
 	fmt.Println("\nShutdown signal received. Cleaning up...")
 	close(h.Quit)
+
+	fmt.Println("📦 Closing database connection pool...")
+	pool.Close()
 
 	time.Sleep(1 * time.Second)
 	fmt.Println("Graceful shutdown complete. Goodnight!")
