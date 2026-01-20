@@ -70,7 +70,7 @@ func (r *PostgresUserRepo) GetUserByEmail(ctx context.Context, email string) (*m
 	query := `
 		SELECT id, username, email, password_hash, created_at, updated_at, is_banned
 		FROM users
-		WHERE email = $1` // FIXED: Was username = $1
+		WHERE email = $1`
 
 	user := &models.User{}
 	err := r.pool.QueryRow(ctx, query, email).Scan(
@@ -94,7 +94,7 @@ func (r *PostgresUserRepo) GetUserByID(ctx context.Context, id uuid.UUID) (*mode
 	query := `
 		SELECT id, username, email, password_hash, created_at, updated_at, is_banned
 		FROM users
-		WHERE id = $1` // FIXED: Was username = $1 and column typo is_baneed
+		WHERE id = $1`
 
 	user := &models.User{}
 	err := r.pool.QueryRow(ctx, query, id).Scan(
