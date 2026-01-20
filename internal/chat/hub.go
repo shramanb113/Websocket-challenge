@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/json"
 	"log"
+	"sync"
 	"time"
 
 	"websocket-challenge/internal/middleware"
@@ -28,6 +29,7 @@ type Message struct {
 }
 
 type Hub struct {
+	mu         sync.RWMutex
 	Clients    map[string]*Client
 	History    []Message
 	Register   chan *Client
@@ -43,6 +45,7 @@ type Client struct {
 	Hub         *Hub
 	Limiter     *middleware.RateLimiter
 	LastWarning time.Time
+	once        sync.Once
 }
 
 func NewHub() *Hub {
@@ -86,13 +89,17 @@ func (h *Hub) broadcastUserList() {
 }
 
 func (h *Hub) cleanupClient(c *Client) {
-	if client, ok := h.Clients[c.Name]; ok {
-		log.Printf("[HUB] Cleaning up resources for client: %s", c.Name)
-		delete(h.Clients, c.Name)
-		client.Conn.Close()
-		close(client.Send)
-		log.Printf("[HUB] Session closed for %s. Active clients remaining: %d", c.Name, len(h.Clients))
-	}
+
+	c.once.Do(func() {
+		if client, ok := h.Clients[c.Name]; ok {
+			log.Printf("[HUB] Cleaning up resources for client: %s", c.Name)
+			delete(h.Clients, c.Name)
+			client.Conn.Close()
+			close(client.Send)
+			log.Printf("[HUB] Session closed for %s. Active clients remaining: %d", c.Name, len(h.Clients))
+		}
+	})
+
 }
 
 func (h *Hub) Run() {
@@ -110,18 +117,38 @@ func (h *Hub) Run() {
 			log.Printf("[HUB] Registration request: %s", client.Name)
 			if oldClient, ok := h.Clients[client.Name]; ok {
 				log.Printf("[HUB] Overwriting existing session for user: %s", client.Name)
-				close(oldClient.Send)
-				delete(h.Clients, client.Name)
+				h.cleanupClient(oldClient)
 			}
 
 			log.Printf("[HUB] Replaying %d history messages to %s", len(h.History), client.Name)
-			for _, msg := range h.History {
-				payload, _ := json.Marshal(msg)
-				client.Send <- payload
-			}
+
+			h.mu.RLock()
+			historySnapshot := make([]Message, len(h.History))
+			copy(historySnapshot, h.History)
+			h.mu.RUnlock()
+
+			go func(c *Client, history []Message) {
+				for _, msg := range history {
+					payload, _ := json.Marshal(msg)
+					select {
+					case c.Send <- payload:
+					case <-time.After(1 * time.Second):
+						return
+					}
+				}
+			}(client, historySnapshot)
 
 			h.Clients[client.Name] = client
 			log.Printf("[HUB] Successfully registered %s. Total active: %d", client.Name, len(h.Clients))
+
+			joinMsg := &Message{
+				Sender:    "SYSTEM",
+				Content:   client.Name + " joined the chat",
+				Type:      TypeSystem,
+				Timestamp: time.Now().Unix(),
+			}
+			h.Broadcast <- joinMsg
+
 			h.broadcastUserList()
 
 		case client := <-h.Unregister:
@@ -147,10 +174,13 @@ func (h *Hub) Run() {
 				}
 
 				if message.Type == TypeChat {
+					h.mu.Lock()
 					h.History = append(h.History, *message)
 					if len(h.History) > 20 {
-						h.History = h.History[1:]
+						copy(h.History, h.History[1:])
+						h.History = h.History[:20]
 					}
+					h.mu.Unlock()
 				}
 
 			case TypePrivate:
