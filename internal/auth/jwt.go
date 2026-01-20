@@ -8,12 +8,18 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 	"time"
 	"websocket-challenge/internal/config"
 	"websocket-challenge/internal/models"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+)
+
+var (
+	jwtKeyCache []byte
+	once        sync.Once
 )
 
 type CustomClaims struct {
@@ -23,11 +29,16 @@ type CustomClaims struct {
 }
 
 func getJwtKey() []byte {
-	cfg := config.Load()
-	if cfg.AuthKey == "" {
-		log.Printf("[AUTH] WARNING: AuthKey is empty in config!")
-	}
-	return []byte(cfg.AuthKey)
+
+	once.Do(func() {
+		cfg := config.Load()
+		if cfg.AuthKey == "" {
+			log.Printf("[AUTH] CRITICAL: AuthKey is empty in config! Tokens will be insecure.")
+		}
+		jwtKeyCache = []byte(cfg.AuthKey)
+		log.Println("[AUTH] Configuration loaded and JWT key cached.")
+	})
+	return jwtKeyCache
 }
 
 func GenerateToken(userId uuid.UUID, user_agent string, ipAddress string) (string, error) {
@@ -36,7 +47,7 @@ func GenerateToken(userId uuid.UUID, user_agent string, ipAddress string) (strin
 
 	claims := &CustomClaims{
 		UserID:      userId,
-		Fingerprint: GenerateFingerprint(user_agent, ipAddress),
+		Fingerprint: GenerateFingerprint(ipAddress, user_agent),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "GoHub",
 			IssuedAt:  jwt.NewNumericDate(now),
