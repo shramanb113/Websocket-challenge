@@ -10,11 +10,10 @@ import (
 )
 
 func (c *Client) WritePump() {
-	log.Printf("[CLIENT] Starting WritePump for %s", c.Name)
-	t := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer func() {
-		log.Printf("[CLIENT] Stopping WritePump for %s", c.Name)
-		t.Stop()
+		ticker.Stop()
+		c.Hub.Unregister <- c
 		c.Conn.Close()
 	}()
 
@@ -23,18 +22,33 @@ func (c *Client) WritePump() {
 		case message, ok := <-c.Send:
 			c.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			if !ok {
-				log.Printf("[CLIENT] Hub closed the send channel for %s", c.Name)
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			if err := c.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("[CLIENT] Write error for %s: %v", c.Name, err)
+
+			w, err := c.Conn.NextWriter(websocket.TextMessage)
+			if err != nil {
 				return
 			}
-		case <-t.C:
+			w.Write(message)
+
+			n := len(c.Send)
+			for i := 0; i < n; i++ {
+				msg, ok := <-c.Send
+				if !ok {
+					break
+				}
+				w.Write([]byte{'\n'})
+				w.Write(msg)
+			}
+
+			if err := w.Close(); err != nil {
+				return
+			}
+
+		case <-ticker.C:
 			c.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				log.Printf("[CLIENT] Heartbeat ping failed for %s", c.Name)
 				return
 			}
 		}
@@ -42,9 +56,7 @@ func (c *Client) WritePump() {
 }
 
 func (c *Client) ReadPump() {
-	log.Printf("[CLIENT] Starting ReadPump for %s", c.Name)
 	defer func() {
-		log.Printf("[CLIENT] Stopping ReadPump for %s", c.Name)
 		c.Hub.Unregister <- c
 		c.Conn.Close()
 	}()
@@ -60,84 +72,87 @@ func (c *Client) ReadPump() {
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("[CLIENT] Unexpected close for %s: %v", c.Name, err)
+				log.Printf("[CLIENT] Unexpected close: %v", err)
 			}
 			break
 		}
 
+		// Rate Limiter
 		if !c.Limiter.Allow() {
-			log.Printf("[SECURITY] Rate limit triggered for %s. Dropping message.", c.Name)
-
 			if time.Since(c.LastWarning) > 3*time.Second {
-				m := &Message{Type: TypeSystem, Sender: "SYSTEM", Content: "⚠️ Rate limit exceeded. Slow down!"}
-				p, _ := json.Marshal(m)
-
+				warning, _ := json.Marshal(&Message{
+					Type: TypeSystem, Sender: "SYSTEM", Content: "⚠️ Rate limit exceeded.", RoomID: c.RoomID,
+				})
 				select {
-				case c.Send <- p:
+				case c.Send <- warning:
 					c.LastWarning = time.Now()
 				default:
-
 				}
-
 			}
 			continue
-
 		}
 
 		payload := &Message{}
 		if err := json.Unmarshal(message, payload); err != nil {
-			log.Printf("[CLIENT] Unmarshal error for %s: %v", c.Name, err)
 			continue
 		}
 
+		payload.Sender = c.Name
+		payload.RoomID = c.RoomID
+		payload.Timestamp = time.Now().Unix()
+
 		if payload.Type == TypeChat && len(payload.Content) > 0 && payload.Content[0] == '/' {
-			log.Printf("[CLIENT] Parsing command from %s: %s", c.Name, payload.Content)
 			parts := strings.SplitN(payload.Content, " ", 2)
-			command := parts[0]
+			cmd := parts[0]
 			rest := ""
 			if len(parts) > 1 {
-				rest = parts[1] + " "
+				rest = parts[1]
 			}
 
-			switch command {
+			switch cmd {
+			case "/help", "/ping":
+				content := "Pong! 🏓"
+				if cmd == "/help" {
+					content = "Commands: /shrug, /lenny, /tableflip, /unflip, /bear, /disapprove, /hug, /dance, /sparkles, /flex, /cry, /coffee, /fix, /deploy, /ping"
+				}
+
+				resp, _ := json.Marshal(&Message{
+					Type: TypeSystem, Sender: "SYSTEM", Content: content, RoomID: c.RoomID,
+				})
+				c.Send <- resp
+				continue
+
 			case "/shrug":
-				payload.Content = rest + "¯\\_(ツ)_/¯"
+				payload.Content = rest + " ¯\\_(ツ)_/¯"
 			case "/lenny":
-				payload.Content = rest + "( ͡° ͜ʖ ͡°)"
+				payload.Content = rest + " ( ͡° ͜ʖ ͡°)"
 			case "/tableflip":
-				payload.Content = rest + "(╯°□°）╯︵ ┻━┻"
+				payload.Content = rest + " (╯°□°）╯︵ ┻━┻"
 			case "/unflip":
-				payload.Content = rest + "┬─┬ノ( º _ ºノ)"
+				payload.Content = rest + " ┬─┬ノ( º _ ºノ)"
 			case "/bear":
-				payload.Content = rest + "ʕ •ᴥ•ʔ"
+				payload.Content = rest + " ʕ •ᴥ•ʔ"
 			case "/disapprove":
-				payload.Content = rest + "ಠ_ಠ"
+				payload.Content = rest + " ಠ_ಠ"
 			case "/hug":
-				payload.Content = rest + "(づ｡◕‿‿◕｡)づ"
+				payload.Content = rest + " (づ｡◕‿‿◕｡)づ"
 			case "/dance":
-				payload.Content = rest + "└|∵|┐  ♪  ┌|∵|┘"
+				payload.Content = rest + " └|∵|┐  ♪  ┌|∵|┘"
 			case "/sparkles":
 				payload.Content = "✨ " + strings.TrimSpace(rest) + " ✨"
 			case "/flex":
-				payload.Content = rest + "ᕦ(ò_ó)ᕤ"
+				payload.Content = rest + " ᕦ(ò_ó)ᕤ"
 			case "/cry":
-				payload.Content = rest + "(╥﹏╥)"
+				payload.Content = rest + " (╥﹏╥)"
 			case "/coffee":
-				payload.Content = rest + "☕ Fueling the developer..."
+				payload.Content = rest + " ☕"
 			case "/fix":
-				payload.Content = rest + "🛠️ It's not a bug, it's a feature!"
+				payload.Content = rest + " 🛠️"
 			case "/deploy":
-				payload.Content = rest + "🚀 Ship it!"
-			case "/ping":
-				payload.Content = "Pong! 🏓"
-			case "/help":
-				payload.Type = TypeSystem
-				payload.Content = "Commands: /shrug, /lenny, /tableflip, /unflip, /bear, /disapprove, /hug, /dance, /sparkles, /flex, /cry, /coffee, /fix, /deploy"
+				payload.Content = rest + " 🚀"
 			}
 		}
 
-		payload.Sender = c.Name
-		payload.Timestamp = time.Now().Unix()
 		c.Hub.Broadcast <- payload
 	}
 }

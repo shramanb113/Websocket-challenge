@@ -57,9 +57,6 @@ func sanitize(room string) string {
 
 func serveWS(h *chat.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-
-		santizedRoom := sanitize(r.URL.Query().Get("room"))
-
 		val := r.Context().Value(middleware.UserIDKey)
 		user, ok := val.(*models.User)
 		if !ok {
@@ -67,19 +64,20 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 			return
 		}
 
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Printf("[WS] Upgrade error for %s: %v", user.Username, err)
+		if user.IsBanned {
+			http.Error(w, "Account disabled", http.StatusForbidden)
 			return
 		}
 
-		if user.IsBanned {
-			deadline := time.Now().Add(time.Second)
-			msg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "Account disabled")
-			conn.WriteControl(websocket.CloseMessage, msg, deadline)
+		roomParam := r.URL.Query().Get("room")
+		santizedRoom := sanitize(roomParam)
+		if santizedRoom == "" {
+			santizedRoom = "general"
+		}
 
-			time.Sleep(200 * time.Millisecond)
-			conn.Close()
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("[WS] Upgrade error for %s: %v", user.Username, err)
 			return
 		}
 
@@ -93,13 +91,12 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 			LastWarning: time.Now(),
 		}
 
-		client.Hub.Register <- client
-
 		go client.WritePump()
 		go client.ReadPump()
+
+		client.Hub.Register <- client
 	}
 }
-
 func main() {
 
 	cfg := config.Load()

@@ -332,14 +332,38 @@ func (c *Client) readPump() {
 			}
 			switch command {
 			case "/shrug":
-				payload.Content = rest + " ¯\\_(ツ)_/¯"
-			case "/tableflip":
-				payload.Content = rest + " (╯°□°）╯︵ ┻━┻"
-			case "/unflip":
-				payload.Content = rest + " ┬─┬ノ( º _ ºノ)"
+				payload.Content = rest + "¯\\_(ツ)_/¯"
 			case "/lenny":
-				payload.Content = rest + " ( ͡° ͜ʖ ͡°)"
-			default:
+				payload.Content = rest + "( ͡° ͜ʖ ͡°)"
+			case "/tableflip":
+				payload.Content = rest + "(╯°□°）╯︵ ┻━┻"
+			case "/unflip":
+				payload.Content = rest + "┬─┬ノ( º _ ºノ)"
+			case "/bear":
+				payload.Content = rest + "ʕ •ᴥ•ʔ"
+			case "/disapprove":
+				payload.Content = rest + "ಠ_ಠ"
+			case "/hug":
+				payload.Content = rest + "(づ｡◕‿‿◕｡)づ"
+			case "/dance":
+				payload.Content = rest + "└|∵|┐  ♪  ┌|∵|┘"
+			case "/sparkles":
+				payload.Content = "✨ " + strings.TrimSpace(rest) + " ✨"
+			case "/flex":
+				payload.Content = rest + "ᕦ(ò_ó)ᕤ"
+			case "/cry":
+				payload.Content = rest + "(╥﹏╥)"
+			case "/coffee":
+				payload.Content = rest + "☕ Fueling the developer..."
+			case "/fix":
+				payload.Content = rest + "🛠️ It's not a bug, it's a feature!"
+			case "/deploy":
+				payload.Content = rest + "🚀 Ship it!"
+			case "/ping":
+				payload.Content = "Pong! 🏓"
+			case "/help":
+				payload.Type = TypeSystem
+				payload.Content = "Commands: /shrug, /lenny, /tableflip, /unflip, /bear, /disapprove, /hug, /dance, /sparkles, /flex, /cry, /coffee, /fix, /deploy"
 
 			}
 		}
