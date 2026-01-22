@@ -39,6 +39,7 @@ type Hub struct {
 }
 
 type Client struct {
+	RoomID      string
 	Conn        *websocket.Conn
 	Name        string
 	Send        chan []byte

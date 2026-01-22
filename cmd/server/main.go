@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +23,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var r *regexp.Regexp = regexp.MustCompile("^[a-z0-9-_]+$")
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -31,8 +35,31 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+func sanitize(room string) string {
+
+	if room == "" {
+		return "general"
+	}
+
+	room = strings.TrimSpace(strings.ToLower(room))
+
+	if len(room) > 32 {
+		return "general"
+	}
+
+	if r.MatchString(room) {
+		return room
+	} else {
+		return "general"
+	}
+
+}
+
 func serveWS(h *chat.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+
+		santizedRoom := sanitize(r.URL.Query().Get("room"))
+
 		val := r.Context().Value(middleware.UserIDKey)
 		user, ok := val.(*models.User)
 		if !ok {
@@ -57,6 +84,7 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 		}
 
 		client := &chat.Client{
+			RoomID:      santizedRoom,
 			Hub:         h,
 			Conn:        conn,
 			Send:        make(chan []byte, 256),
