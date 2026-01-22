@@ -21,6 +21,7 @@ const (
 )
 
 type Message struct {
+	RoomID    string      `json:"roomID"`
 	Sender    string      `json:"sender"`
 	Content   string      `json:"content"`
 	Type      MessageType `json:"type"`
@@ -30,6 +31,7 @@ type Message struct {
 
 type Hub struct {
 	mu         sync.RWMutex
+	AllClients map[string]*Client
 	Rooms      map[string]map[*Client]bool
 	History    map[string][]Message
 	Register   chan *Client
@@ -52,6 +54,7 @@ type Client struct {
 func NewHub() *Hub {
 	log.Printf("Initializing new instance of HUB ....")
 	return &Hub{
+		AllClients: make(map[string]*Client),
 		Rooms:      make(map[string]map[*Client]bool),
 		History:    make(map[string][]Message),
 		Register:   make(chan *Client),
@@ -61,46 +64,56 @@ func NewHub() *Hub {
 	}
 }
 
-func (h *Hub) getConnectedUsers() []string {
-	users := make([]string, 0, len(h.Clients))
-	for name := range h.Clients {
-		users = append(users, name)
+func (h *Hub) getConnectedUsers(roomId string) []string {
+	users := make([]string, 0, len(h.Rooms[roomId]))
+	for name := range h.Rooms[roomId] {
+		users = append(users, name.Name)
 	}
 	return users
 }
 
-func (h *Hub) broadcastUserList() {
-	log.Println("[HUB] Generating fresh user list for broadcast...")
-	users := h.getConnectedUsers()
+func (h *Hub) broadcastUserList(roomId string) {
+	users := h.getConnectedUsers(roomId)
 	rawList, _ := json.Marshal(users)
 
 	message := &Message{
+		RoomID:    roomId,
 		Sender:    "SYSTEM",
 		Content:   string(rawList),
 		Type:      TypeUserList,
 		Timestamp: time.Now().Unix(),
 	}
+	payload, _ := json.Marshal(message)
 
-	select {
-	case h.Broadcast <- message:
-		log.Printf("[HUB] User list queued (Count: %d)", len(users))
-	default:
-		log.Println("[HUB] CRITICAL: Broadcast channel full, dropping user list update")
+	if room, ok := h.Rooms[roomId]; ok {
+		for client := range room {
+			select {
+			case client.Send <- payload:
+			default:
+				go func(c *Client) { h.Unregister <- c }(client)
+			}
+		}
 	}
 }
 
 func (h *Hub) cleanupClient(c *Client) {
-
 	c.once.Do(func() {
-		if client, ok := h.Clients[c.Name]; ok {
-			log.Printf("[HUB] Cleaning up resources for client: %s", c.Name)
-			delete(h.Clients, c.Name)
-			client.Conn.Close()
-			close(client.Send)
-			log.Printf("[HUB] Session closed for %s. Active clients remaining: %d", c.Name, len(h.Clients))
+		if room, ok := h.Rooms[c.RoomID]; ok {
+			delete(room, c)
+			if len(room) == 0 {
+				delete(h.Rooms, c.RoomID)
+				delete(h.History, c.RoomID)
+			}
 		}
-	})
 
+		if currentClient, ok := h.AllClients[c.Name]; ok && currentClient == c {
+			delete(h.AllClients, c.Name)
+		}
+
+		c.Conn.Close()
+		close(c.Send)
+		log.Printf("[HUB] Cleanup complete for %s in %s", c.Name, c.RoomID)
+	})
 }
 
 func (h *Hub) Run() {
@@ -109,23 +122,29 @@ func (h *Hub) Run() {
 		select {
 		case <-h.Quit:
 			log.Println("[HUB] Quit signal received. Shutting down all client connections...")
-			for _, client := range h.Clients {
+			for _, client := range h.AllClients {
 				h.cleanupClient(client)
 			}
 			return
 
 		case client := <-h.Register:
 			log.Printf("[HUB] Registration request: %s", client.Name)
-			if oldClient, ok := h.Clients[client.Name]; ok {
+			if oldClient, ok := h.AllClients[client.Name]; ok {
 				log.Printf("[HUB] Overwriting existing session for user: %s", client.Name)
 				h.cleanupClient(oldClient)
 			}
 
-			log.Printf("[HUB] Replaying %d history messages to %s", len(h.History), client.Name)
+			// FIX: Unified initialization to ensure History and Room state are synced
+			if _, ok := h.Rooms[client.RoomID]; !ok {
+				h.Rooms[client.RoomID] = make(map[*Client]bool)
+				h.History[client.RoomID] = make([]Message, 0, 21)
+			}
+
+			log.Printf("[HUB] Replaying %d history messages to %s", len(h.History[client.RoomID]), client.Name)
 
 			h.mu.RLock()
-			historySnapshot := make([]Message, len(h.History))
-			copy(historySnapshot, h.History)
+			historySnapshot := make([]Message, len(h.History[client.RoomID]))
+			copy(historySnapshot, h.History[client.RoomID])
 			h.mu.RUnlock()
 
 			go func(c *Client, history []Message) {
@@ -139,24 +158,40 @@ func (h *Hub) Run() {
 				}
 			}(client, historySnapshot)
 
-			h.Clients[client.Name] = client
-			log.Printf("[HUB] Successfully registered %s. Total active: %d", client.Name, len(h.Clients))
+			h.AllClients[client.Name] = client
+			h.Rooms[client.RoomID][client] = true
+
+			log.Printf("[HUB] Successfully registered %s. Total active in room : %d", client.Name, len(h.Rooms[client.RoomID]))
 
 			joinMsg := &Message{
+				RoomID:    client.RoomID,
 				Sender:    "SYSTEM",
 				Content:   client.Name + " joined the chat",
 				Type:      TypeSystem,
 				Timestamp: time.Now().Unix(),
 			}
-			h.Broadcast <- joinMsg
+			joinPayload, _ := json.Marshal(joinMsg)
+			for c := range h.Rooms[client.RoomID] {
+				select {
+				case c.Send <- joinPayload:
+				default:
+					continue
+				}
+			}
 
-			h.broadcastUserList()
+			h.broadcastUserList(client.RoomID)
 
 		case client := <-h.Unregister:
-			log.Printf("[HUB] Unregistering client: %s", client.Name)
-			if _, ok := h.Clients[client.Name]; ok {
-				h.cleanupClient(client)
-				h.broadcastUserList()
+			h.cleanupClient(client)
+
+			if room, ok := h.Rooms[client.RoomID]; ok {
+				if len(room) == 0 {
+					delete(h.Rooms, client.RoomID)
+					delete(h.History, client.RoomID)
+					log.Printf("[HUB] Room %s is now empty and has been pruned", client.RoomID)
+				} else {
+					h.broadcastUserList(client.RoomID)
+				}
 			}
 
 		case message := <-h.Broadcast:
@@ -165,7 +200,7 @@ func (h *Hub) Run() {
 			switch message.Type {
 			case TypeChat, TypeSystem, TypeUserList:
 				log.Printf("[HUB] Broadcasting %s message from %s", message.Type, message.Sender)
-				for _, client := range h.Clients {
+				for client := range h.Rooms[message.RoomID] {
 					select {
 					case client.Send <- payload:
 					default:
@@ -176,25 +211,47 @@ func (h *Hub) Run() {
 
 				if message.Type == TypeChat {
 					h.mu.Lock()
-					h.History = append(h.History, *message)
-					if len(h.History) > 20 {
-						copy(h.History, h.History[1:])
-						h.History = h.History[:20]
+					h.History[message.RoomID] = append(h.History[message.RoomID], *message)
+					if len(h.History[message.RoomID]) > 20 {
+						// FIX: Zero out the first element to allow GC to clean up string memory/pointers
+						h.History[message.RoomID][0] = Message{}
+						h.History[message.RoomID] = h.History[message.RoomID][1:]
 					}
 					h.mu.Unlock()
 				}
 
 			case TypePrivate:
-				log.Printf("[HUB] Routing private message: %s -> %s", message.Sender, message.Target)
-				if sender, ok := h.Clients[message.Sender]; ok {
-					sender.Send <- payload
-				}
-				if message.Target != message.Sender {
-					if target, ok := h.Clients[message.Target]; ok {
-						target.Send <- payload
+				log.Printf("[HUB] Routing private message: %s -> %s (Room: %s)", message.Sender, message.Target, message.RoomID)
+
+				target, targetOk := h.AllClients[message.Target]
+				sender, senderOk := h.AllClients[message.Sender]
+
+				if targetOk && target.RoomID == message.RoomID {
+					select {
+					case target.Send <- payload:
 						log.Printf("[HUB] Private message delivered to %s", message.Target)
-					} else {
-						log.Printf("[HUB] Private message failed: Target %s offline", message.Target)
+					default:
+						go func(c *Client) { h.Unregister <- c }(target)
+					}
+
+					if senderOk && message.Target != message.Sender {
+						select {
+						case sender.Send <- payload:
+						default:
+							go func(c *Client) { h.Unregister <- c }(sender)
+						}
+					}
+				} else {
+					log.Printf("[HUB] Private message failed: %s not in room %s", message.Target, message.RoomID)
+					if senderOk {
+						errorMsg := &Message{
+							Sender:  "SYSTEM",
+							Content: "User " + message.Target + " is not in this room.",
+							Type:    TypeSystem,
+							RoomID:  message.RoomID,
+						}
+						errPayload, _ := json.Marshal(errorMsg)
+						sender.Send <- errPayload
 					}
 				}
 			}
