@@ -110,6 +110,21 @@
 
 ---
 
+## Challenge 11: Multi-Tenancy (Room-based Isolation)
+
+**Problem Statement:** Transform a single-stream "Global Chat" into a scalable multi-room architecture where users are isolated by context and security boundaries.
+
+**The Struggle:** Managing state across multiple rooms creates high risk for "Message Leaking" (users seeing data from rooms they aren't in) and "Zombie Goroutines" (connections staying alive in memory after a room is empty). Additionally, trust-based room assignment allowed malicious users to spoof their RoomID in JSON payloads to spy on other rooms.
+
+**The Win:** Implemented a **Sharded Hub Architecture** with strict server-side validation.
+
+- **Room Sharding:** Re-engineered the `Hub` to manage a map of maps (`map[string]map[*Client]bool`), allowing O(1) lookups for room-specific broadcasting while ensuring memory is reclaimed when a room becomes empty.
+- **Identity & Room Enforcement:** Hardened the `ReadPump` to ignore client-provided RoomIDs. The server now forces every message into the `RoomID` associated with the authenticated session, preventing Cross-Room Spoofing.
+- **Stateful History Replay:** Integrated a localized history buffer per room. New participants automatically receive a "Context Snapshot" of the last 20 messages upon joining, providing immediate conversation continuity.
+- **Direct System Messaging:** Developed a non-blocking notification system that bypasses the global broadcast channel for "User Joined" events, eliminating the risk of internal deadlocks during high-concurrency connection spikes.
+
+---
+
 ## ⚡ Technical Stack
 
 | Category        | Technology                                      |
@@ -123,29 +138,53 @@
 
 ## 🧠 Lessons Learned
 
-### 1. **Distributed Load:** Parsing commands at the edge (`readPump`) is infinitely more scalable than parsing at the center (`Hub`).
+### 1. Distributed Load vs. Centralized Bottlenecks
 
-### 2. **State is a Single Source of Truth:** You must implement server-side evictions. If the server thinks a client is there but they aren't, the system is broken.
+**The Insight:** Parsing commands at the "edge" (`ReadPump`) is infinitely more scalable than parsing at the "center" (`Hub`).
 
-### 3. **Optimistic UI vs. Truth:** The UI should react instantly to browser `offline` events, but the backend "Watchdog" is the final arbiter of connection health.
+- **Why it matters:** By offloading CPU-intensive tasks like regex matching, string manipulation, and JSON unmarshaling to the individual client goroutines, the Hub remains a lean, high-speed traffic controller. This prevents a single "spammy" user from lagging the entire server.
 
-### 4. Zero-Trust Identity (Challenge 8)
+### 2. State as a Single Source of Truth
+
+**The Insight:** You must implement aggressive server-side evictions.
+
+- **Why it matters:** If the server's internal state (the Room map) thinks a client is connected when they are actually "ghosting" (due to a silent network drop), the system is fundamentally broken. We learned that the server must be the final arbiter of truth, using active heartbeats to prune its own state.
+
+### 3. Optimistic UI vs. Backend "Watchdog"
+
+**The Insight:** The UI should react instantly to browser `offline` events, but the backend is the ultimate authority.
+
+- **Why it matters:** We learned to separate the "User Experience" (showing a disconnected icon) from the "Connection Health" (the `ReadDeadline`). The backend doesn't care about the UI; it only cares about the bytes. If the heartbeat fails, the backend watchdog must tear down the connection to maintain data integrity.
+
+### 4. Zero-Trust Identity
 
 **The Insight:** Use JWTs in cookies, but treat them as "Blind Tokens" on the frontend.
 
-- **Why it matters:** By using `HttpOnly` and `Secure` flags, we acknowledge that the frontend doesn't need to "read" the token—it only needs to "possess" it. This eliminates XSS-based token theft. We learned that the backend is the only entity that needs to know the user's true identity, keeping the frontend logic lean and secure.
+- **Why it matters:** By using `HttpOnly` and `Secure` flags, the frontend doesn't need to "read" the token—it only needs to "possess" it. This eliminates XSS-based token theft. The backend remains the only entity that verifies identity, keeping the client-side logic decoupled and secure.
 
-### 5. Explicit Origin Sovereignty (Challenge 9)
+### 5. Explicit Origin Sovereignty
 
-**The Insight:** WebSockets are the "Wild West" of the SOP (Same-Origin Policy).
+**The Insight:** WebSockets are the "Wild West" of the Same-Origin Policy (SOP).
 
-- **Why it matters:** Unlike standard REST APIs, WebSockets don't automatically follow the browser's origin rules. We learned that a secure server must be its own bouncer, explicitly checking the `Origin` header during the HTTP Upgrade. Without this, any malicious site could "hijack" a user's connection.
+- **Why it matters:** Unlike REST APIs, WebSockets don't automatically follow browser origin rules. We learned that a secure server must be its own bouncer, explicitly checking the `Origin` header during the HTTP Upgrade. Without this, Cross-Site WebSocket Hijacking (CSWSH) could allow malicious sites to impersonate users.
 
-### 6. Production Parity via Local CA (Challenge 10)
+### 6. Production Parity via Local CA
 
 **The Insight:** Local development must mimic production security constraints early.
 
-- **Why it matters:** Waiting until deployment to test HTTPS/WSS is a recipe for failure. By setting up a local Certificate Authority (mkcert), we learned that "Secure Contexts" change how browsers behave (like cookie handling and API access). Solving these "Green Padlock" issues locally ensures that the move to production is just a configuration change, not a code rewrite.
+- **Why it matters:** Waiting until deployment to test HTTPS/WSS is a recipe for failure. By setting up a local Certificate Authority (`mkcert`), we learned that "Secure Contexts" fundamentally change how browsers handle cookies and TLS handshakes. This ensures the move to production is a configuration change, not a code rewrite.
+
+### 7. Atomic History Pruning & GC Signals
+
+**The Insight:** Slicing in Go is a pointer operation, not a memory deletion.
+
+- **Why it matters:** Slicing a message history (`history[1:]`) keeps the underlying array alive, leading to "Pointer Bloat." We learned to explicitly nil out the deleted index (`history[0] = Message{}`) to signal the Garbage Collector that the memory (especially large strings) can be reclaimed.
+
+### 8. Sequence Consistency & Non-Blocking Registration
+
+**The Insight:** Hub events must be serialized, but goroutine startup must be parallelized.
+
+- **Why it matters:** To prevent deadlocks, we learned to spin up the `ReadPump` and `WritePump` _before_ registering the client with the Hub. This ensures the client is ready to receive the "History Replay" the moment it exists in the Hub's eyes, preventing blocked channels and frozen loops.
 
 ---
 
@@ -169,7 +208,7 @@
 
 ### Phase 3: Advanced Messaging Logic
 
-- [ ] **Challenge 11:** Multi-Tenancy (Room-based Isolation).
+- [x] **Challenge 11:** Multi-Tenancy (Room-based Isolation).
 - [ ] **Challenge 12:** Message Persistence (Redis/PostgreSQL Integration).
 - [ ] **Challenge 13:** "Message Delivered" & "Seen" Receipts (Acknowledge Logic).
 - [ ] **Challenge 14:** Binary Data Support (File Transfers & Image Previews).
