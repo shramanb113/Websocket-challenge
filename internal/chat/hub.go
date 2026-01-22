@@ -30,8 +30,8 @@ type Message struct {
 
 type Hub struct {
 	mu         sync.RWMutex
-	Clients    map[string]*Client
-	History    []Message
+	Rooms      map[string]map[*Client]bool
+	History    map[string][]Message
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan *Message
@@ -50,13 +50,13 @@ type Client struct {
 }
 
 func NewHub() *Hub {
-	log.Println("[HUB] Initializing new Hub instance...")
+	log.Printf("Initializing new instance of HUB ....")
 	return &Hub{
-		Clients:    make(map[string]*Client),
-		History:    make([]Message, 0),
+		Rooms:      make(map[string]map[*Client]bool),
+		History:    make(map[string][]Message),
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
-		Broadcast:  make(chan *Message, 256),
+		Broadcast:  make(chan *Message),
 		Quit:       make(chan struct{}),
 	}
 }
