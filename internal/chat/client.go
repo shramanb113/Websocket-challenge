@@ -20,19 +20,23 @@ func (c *Client) WritePump() {
 	for {
 		select {
 		case message, ok := <-c.Send:
-			c.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			c.Conn.SetWriteDeadline(time.Now().Add(time.Second * 10))
+
 			if !ok {
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
 			w, err := c.Conn.NextWriter(websocket.TextMessage)
+
 			if err != nil {
 				return
 			}
+
 			w.Write(message)
 
 			n := len(c.Send)
+
 			for i := 0; i < n; i++ {
 				msg, ok := <-c.Send
 				if !ok {
@@ -41,16 +45,17 @@ func (c *Client) WritePump() {
 				w.Write([]byte{'\n'})
 				w.Write(msg)
 			}
-
 			if err := w.Close(); err != nil {
 				return
 			}
 
 		case <-ticker.C:
-			c.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
+			c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := c.Conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+				log.Printf("Ping sent failed to %s", c.Name)
 			}
+			log.Printf("Ping sent successful to %s", c.Name)
+
 		}
 	}
 }

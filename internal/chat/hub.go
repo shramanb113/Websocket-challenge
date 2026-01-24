@@ -134,7 +134,6 @@ func (h *Hub) Run() {
 				h.cleanupClient(oldClient)
 			}
 
-			// FIX: Unified initialization to ensure History and Room state are synced
 			if _, ok := h.Rooms[client.RoomID]; !ok {
 				h.Rooms[client.RoomID] = make(map[*Client]bool)
 				h.History[client.RoomID] = make([]Message, 0, 21)
@@ -213,7 +212,6 @@ func (h *Hub) Run() {
 					h.mu.Lock()
 					h.History[message.RoomID] = append(h.History[message.RoomID], *message)
 					if len(h.History[message.RoomID]) > 20 {
-						// FIX: Zero out the first element to allow GC to clean up string memory/pointers
 						h.History[message.RoomID][0] = Message{}
 						h.History[message.RoomID] = h.History[message.RoomID][1:]
 					}
