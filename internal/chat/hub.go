@@ -23,6 +23,7 @@ const (
 	TypeSystem   MessageType = "system"
 	TypeUserList MessageType = "user_list"
 	TypeAck      MessageType = "user_ack"
+	TypeTyping   MessageType = "user_typing"
 )
 
 type MessageStatus int
@@ -98,7 +99,7 @@ func (h *Hub) PersistMessageWorker(wg *sync.WaitGroup) {
 
 		case models.TypeAck:
 			if err := h.Repo.UpdateStatus(ctx, msg.ID, models.MessageStatus(msg.Status)); err != nil {
-				log.Printf("Worker [UPDATE] error: %v", err)
+				log.Printf("Worker [UPDATE] error: %v for message id : %s", err, msg.ID)
 			}
 
 		default:
@@ -260,9 +261,14 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 			payload, _ := json.Marshal(message)
 
 			switch message.Type {
-			case TypeChat, TypeSystem, TypeUserList:
+			case TypeChat, TypeSystem, TypeUserList, TypeTyping:
 				log.Printf("[HUB] Broadcasting %s message from %s", message.Type, message.Sender)
 				for client := range h.Rooms[message.RoomID] {
+
+					if message.Sender == client.Name {
+						continue
+					}
+
 					select {
 					case client.Send <- payload:
 					default:
