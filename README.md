@@ -125,6 +125,21 @@
 
 ---
 
+## Challenge 12: Persistent Storage & Async Write-Ahead Logging
+
+**Problem Statement:** Transition the chat engine from a volatile, memory-only state to a durable, database-backed architecture capable of surviving server restarts and providing infinite history.
+
+**The Struggle:** Writing to a database (PostgreSQL) is significantly slower than RAM. Synchronous database writes during a broadcast would create a "Head-of-Line Blocking" disaster, where one slow disk write freezes the entire chat for all users. Furthermore, a sudden server shutdown could lead to "Data Siloing," where messages sitting in memory buffers are lost forever because the database connection was severed too early.
+
+**The Win:** Engineered a **Non-Blocking Persistence Pipeline** using a Worker-Queue pattern.
+
+- **Asynchronous Persistence Queue:** Decoupled the live broadcast from the storage layer using a buffered channel (`PersistenceQueue`). The Hub "fires and forgets" messages to a background worker, maintaining sub-millisecond latency for active users regardless of database load.
+- **SQL-Based Privacy Filtering:** Replaced in-memory history slices with a Postgres Repository. The `Fetch` logic was hardened with a relational "Privacy Shield" query, ensuring that private messages are only replayed to the specific sender or target during the room join phase.
+- **Durable History Replay:** Shifted from a fixed 20-message RAM buffer to a "Deep History" fetch. New participants now pull a context snapshot directly from Postgres, allowing for infinite scrolling and historical data retrieval that survives Hub restarts.
+- **Graceful Shutdown Orchestration:** Implemented a sophisticated shutdown sequence using `sync.WaitGroup`. The system now ensures the persistence worker "drains" its entire buffer to the database before the application context or database pool is allowed to close, guaranteeing zero message loss during deployments.
+
+---
+
 ## ⚡ Technical Stack
 
 | Category        | Technology                                      |
@@ -209,7 +224,7 @@
 ### Phase 3: Advanced Messaging Logic
 
 - [x] **Challenge 11:** Multi-Tenancy (Room-based Isolation).
-- [ ] **Challenge 12:** Message Persistence (Redis/PostgreSQL Integration).
+- [x] **Challenge 12:** Message Persistence (Redis/PostgreSQL Integration).
 - [ ] **Challenge 13:** "Message Delivered" & "Seen" Receipts (Acknowledge Logic).
 - [ ] **Challenge 14:** Binary Data Support (File Transfers & Image Previews).
 
