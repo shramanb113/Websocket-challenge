@@ -140,6 +140,22 @@
 
 ---
 
+## Challenge 13: Scalable Acknowledgment Handshaking & State Persistence
+
+**Problem Statement:** Transition from a "Send-and-Pray" delivery model to a verifiable, multi-stage Message Lifecycle. The system needed to support delivery and read receipts (Status Ticks) without creating a "Broadcast Storm" that would choke the server in high-traffic rooms.
+
+**The Struggle:** Traditional real-time updates for every "Read" event create an exponential increase in network traffic ($O(N^2)$). In a room with 100 users, broadcasting a "Seen" event to everyone for a single message creates 99 unnecessary packets. Additionally, out-of-order network delivery (Race Conditions) threatened to overwrite "Seen" statuses with "Delivered" statuses if an older packet arrived late, causing "flickering" UI ticks.
+
+**The Win:** Implemented an **Eventually Consistent Acknowledgment Pipeline** and a **Monotonic State Shield**.
+
+- **Client-Side UUID Sovereignty:** Shifted ID generation from the Database to the Frontend. This allows the Sender and Recipient to reference the exact same message fingerprint instantly, enabling "Optimistic UI" updates and immediate acknowledgment handshaking before the server even confirms the write.
+- **Scalable "Silent" Updates:** Engineered a one-way event flow for `TypeAck` messages. Acknowledgments are routed directly from the Hub to the Persistence Worker for a "Database-Only" update, bypassing the broadcast loop. This preserves CPU and bandwidth, relying on "Fetch-on-Refresh" or "Delta-Syncs" for state consistency.
+- **Monotonic "Regression Shield" Query:** Hardened the Repository with a state-aware SQL update logic: `WHERE id = $1 AND status < $2`. This ensures the message lifecycle only moves forward (Saved → Delivered → Seen). If a "Delivered" packet arrives after a "Seen" packet due to network jitter, the database safely ignores the "downgrade."
+- **Polymorphic Worker Logic:** Upgraded the `PersistMessageWorker` to handle multiple operation types from a single unified stream. The worker now dynamically switches between `INSERT` (for new chat/private messages) and `UPDATE` (for acknowledgments), maintaining strict sequential integrity for every message's lifecycle.
+- **Idempotent Storage:** Integrated `ON CONFLICT (id) DO NOTHING` into the persistence layer. This protects the system against duplicate message delivery caused by client-side retries or network "ghosting," ensuring the chat history remains clean and unique.
+
+---
+
 ## ⚡ Technical Stack
 
 | Category        | Technology                                      |
@@ -225,7 +241,7 @@
 
 - [x] **Challenge 11:** Multi-Tenancy (Room-based Isolation).
 - [x] **Challenge 12:** Message Persistence (Redis/PostgreSQL Integration).
-- [ ] **Challenge 13:** "Message Delivered" & "Seen" Receipts (Acknowledge Logic).
+- [x] **Challenge 13:** "Message Delivered" & "Seen" Receipts (Acknowledge Logic).
 - [ ] **Challenge 14:** Binary Data Support (File Transfers & Image Previews).
 
 ### Phase 4: Horizontal Scaling & Distribution
