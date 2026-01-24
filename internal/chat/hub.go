@@ -11,6 +11,7 @@ import (
 	"websocket-challenge/internal/models"
 	"websocket-challenge/internal/repository"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -21,15 +22,26 @@ const (
 	TypePrivate  MessageType = "private"
 	TypeSystem   MessageType = "system"
 	TypeUserList MessageType = "user_list"
+	TypeAck      MessageType = "user_ack"
+)
+
+type MessageStatus int
+
+const (
+	StatusSaved MessageStatus = iota
+	StatusDelivered
+	StatusSeen
 )
 
 type Message struct {
-	RoomID    string      `json:"roomID"`
-	Sender    string      `json:"sender"`
-	Content   string      `json:"content"`
-	Type      MessageType `json:"type"`
-	Target    string      `json:"target,omitempty"`
-	Timestamp time.Time   `json:"timestamp"`
+	ID        uuid.UUID     `json:"id"`
+	RoomID    string        `json:"roomID"`
+	Sender    string        `json:"sender"`
+	Content   string        `json:"content"`
+	Type      MessageType   `json:"type"`
+	Target    string        `json:"target,omitempty"`
+	Timestamp time.Time     `json:"timestamp"`
+	Status    MessageStatus `json:"status"`
 }
 
 type Hub struct {
@@ -74,16 +86,28 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup) *Hub {
 	return h
 }
 func (h *Hub) PersistMessageWorker(wg *sync.WaitGroup) {
-
 	defer wg.Done()
 	for msg := range h.PersistenceQueue {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := h.Repo.Save(ctx, msg); err != nil {
-			log.Printf("Worker error: %v", err)
+
+		switch msg.Type {
+		case models.TypeChat, models.TypePrivate:
+			if err := h.Repo.Save(ctx, msg); err != nil {
+				log.Printf("Worker [SAVE] error: %v", err)
+			}
+
+		case models.TypeAck:
+			if err := h.Repo.UpdateStatus(ctx, msg.ID, models.MessageStatus(msg.Status)); err != nil {
+				log.Printf("Worker [UPDATE] error: %v", err)
+			}
+
+		default:
+			log.Printf("Worker: Received unhandled message type: %s", msg.Type)
 		}
+
 		cancel()
 	}
-	log.Println("Worker: All messages persisted. Shutting down.")
+	log.Println("Worker: All messages processed. Shutting down.")
 }
 
 func (h *Hub) replayHistory(c *Client) {
@@ -104,12 +128,14 @@ func (h *Hub) replayHistory(c *Client) {
 
 func (m *Message) ToModel() *models.Message {
 	return &models.Message{
+		ID:        m.ID,
 		RoomID:    m.RoomID,
 		Sender:    m.Sender,
 		Target:    m.Target,
 		Content:   m.Content,
 		Type:      models.MessageType(m.Type),
 		Timestamp: m.Timestamp,
+		Status:    models.MessageStatus(m.Status),
 	}
 }
 
@@ -279,8 +305,10 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 						sender.Send <- errPayload
 					}
 				}
+			case TypeAck:
+				log.Printf("[HUB] Ack received: Msg %s is now status %d", message.ID, message.Status)
 			}
-			if message.Type == TypeChat || message.Type == TypePrivate {
+			if message.Type == TypeChat || message.Type == TypePrivate || message.Type == TypeAck {
 				h.PersistenceQueue <- message.ToModel()
 			}
 		}

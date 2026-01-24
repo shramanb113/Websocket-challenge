@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -100,6 +101,10 @@ func (c *Client) ReadPump() {
 		payload := &Message{}
 		if err := json.Unmarshal(message, payload); err != nil {
 			continue
+		}
+
+		if payload.ID == uuid.Nil && payload.Type != TypeAck {
+			payload.ID = uuid.New()
 		}
 
 		payload.Sender = c.Name
