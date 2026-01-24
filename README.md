@@ -156,6 +156,20 @@
 
 ---
 
+## Challenge 14: Real-Time Presence & Intent Signaling (Typing Indicators)
+
+**Problem Statement:** Enhance the user experience by communicating user intent (Typing...) without compromising the performance of the core persistence engine.
+
+**The Struggle:** High-frequency events like typing can generate dozens of packets per second per user. Treating these as standard messages would result in "Database Noise," where transient UI states clutter the primary chat tables, and "Broadcast Congestion," where the server wastes resources sending a user's own typing status back to them.
+
+**The Win:** Engineered a **Volatile Event Bypass** within the Hub.
+
+- **Ephemeral Routing:** Implemented a non-persistent branch in the Hub's broadcast logic. `TypeTyping` events are identified and routed through the WebSocket layer for immediate delivery but are strictly filtered out of the `PersistenceQueue`, ensuring 0% database overhead for transient states.
+- **Echo-Suppression Logic:** Optimized room broadcasts by implementing a sender-identity check. The Hub now intelligently skips the sender’s own connection during a typing-state broadcast, reducing outgoing bandwidth and client-side processing.
+- **State-Separation Architecture:** Formally decoupled "Durable Data" (Chat History) from "Transient State" (Presence/Typing). This architectural split prepares the system for Horizontal Scaling, where transient states can eventually be offloaded to an in-memory store like Redis.
+
+---
+
 ## ⚡ Technical Stack
 
 | Category        | Technology                                      |
@@ -217,6 +231,48 @@
 
 - **Why it matters:** To prevent deadlocks, we learned to spin up the `ReadPump` and `WritePump` _before_ registering the client with the Hub. This ensures the client is ready to receive the "History Replay" the moment it exists in the Hub's eyes, preventing blocked channels and frozen loops.
 
+### 9. Persistent Path vs. Volatile Path
+
+**The Insight:** Not all data is created equal; treating every packet as "permanent" is a scalability trap.
+
+- **Why it matters:** We learned to bifurcate the Hub’s logic. **Durable data** (Chat/Acks) is routed to the `PersistenceQueue`, while **Transient data** (Typing Indicators) is broadcast and immediately garbage collected. This prevents our database from becoming a graveyard of "User is typing..." garbage.
+
+### 10. The "Regression Shield" (Monotonic State)
+
+**The Insight:** In distributed systems, late-arriving packets are inevitable.
+
+- **Why it matters:** We learned that a simple `UPDATE status = X` is dangerous. By using the SQL condition `WHERE status < new_status`, we created a "Monotonic Shield." This ensures that a "Delivered" receipt arriving after a "Seen" receipt (due to network jitter) cannot move the message status backward in time.
+
+### 11. Decoupling Broadcast from Storage (The Worker-Queue Pattern)
+
+**The Insight:** Database latency must never dictate UI responsiveness.
+
+- **Why it matters:** Writing to Postgres is magnitudes slower than sending a WebSocket frame. By implementing an asynchronous `PersistenceQueue`, we decoupled the "Live Experience" from the "Storage Requirement." The Hub "fires and forgets" to a background worker, ensuring the chat stays snappy even if the database is under heavy load.
+
+### 12. Client-Side ID Sovereignty
+
+**The Insight:** Generating IDs on the server creates an "Identity Gap" during the round-trip.
+
+- **Why it matters:** By shifting UUID generation to the Frontend, the client can "own" the message's identity before the server even acknowledges it. This allows for **Optimistic UI** (showing the message instantly) and provides a reliable handle for future Acks (Delivered/Seen) without waiting for a database-generated sequence number.
+
+### 13. Idempotency & Conflict Resolution
+
+**The Insight:** Network retries will eventually cause duplicate "Insert" attempts.
+
+- **Why it matters:** Since the Frontend now generates IDs, a user clicking "Send" twice or a client-side retry logic could send the same message twice. We learned to use `ON CONFLICT (id) DO NOTHING` to make our `Save` operation **idempotent**, ensuring our chat history remains a "Single Version of Truth" regardless of network flakiness.
+
+### 14. Echo Suppression & Bandwidth Conservation
+
+**The Insight:** Sending a user's own data back to them is a "Broadcasting Tax."
+
+- **Why it matters:** Especially for high-frequency events like **Typing Indicators**, we learned to implement a sender-check in the Hub. By skipping the sender's own connection during the broadcast loop, we halved the outgoing traffic for those events and reduced the client-side CPU overhead of re-processing their own actions.
+
+### 15. Graceful Shutdown & The "Draining" Pattern
+
+**The Insight:** A `kill -9` is a message's worst enemy.
+
+- **Why it matters:** We learned that the persistence worker must be the last thing to die. Using `sync.WaitGroup`, we orchestrated a shutdown sequence where the Hub closes the queue, the worker "drains" every remaining message into the database, and _only then_ does the application exit. This guarantees **Zero Data Loss** during deployments.
+
 ---
 
 ## 🗺️ The Road Ahead (The Path to 20)
@@ -242,7 +298,7 @@
 - [x] **Challenge 11:** Multi-Tenancy (Room-based Isolation).
 - [x] **Challenge 12:** Message Persistence (Redis/PostgreSQL Integration).
 - [x] **Challenge 13:** "Message Delivered" & "Seen" Receipts (Acknowledge Logic).
-- [ ] **Challenge 14:** Real-Time Presence & Intent Signaling.
+- [x] **Challenge 14:** Real-Time Presence & Intent Signaling.
 
 ### Phase 4: Horizontal Scaling & Distribution
 
