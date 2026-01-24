@@ -242,7 +242,7 @@
 - [x] **Challenge 11:** Multi-Tenancy (Room-based Isolation).
 - [x] **Challenge 12:** Message Persistence (Redis/PostgreSQL Integration).
 - [x] **Challenge 13:** "Message Delivered" & "Seen" Receipts (Acknowledge Logic).
-- [ ] **Challenge 14:** Binary Data Support (File Transfers & Image Previews).
+- [ ] **Challenge 14:** Real-Time Presence & Intent Signaling.
 
 ### Phase 4: Horizontal Scaling & Distribution
 
