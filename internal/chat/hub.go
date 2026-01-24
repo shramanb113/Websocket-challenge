@@ -1,12 +1,15 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
 	"time"
 
 	"websocket-challenge/internal/middleware"
+	"websocket-challenge/internal/models"
+	"websocket-challenge/internal/repository"
 
 	"github.com/gorilla/websocket"
 )
@@ -26,18 +29,19 @@ type Message struct {
 	Content   string      `json:"content"`
 	Type      MessageType `json:"type"`
 	Target    string      `json:"target,omitempty"`
-	Timestamp int64       `json:"timestamp"`
+	Timestamp time.Time   `json:"timestamp"`
 }
 
 type Hub struct {
-	mu         sync.RWMutex
-	AllClients map[string]*Client
-	Rooms      map[string]map[*Client]bool
-	History    map[string][]Message
-	Register   chan *Client
-	Unregister chan *Client
-	Broadcast  chan *Message
-	Quit       chan struct{}
+	mu               sync.RWMutex
+	AllClients       map[string]*Client
+	Rooms            map[string]map[*Client]bool
+	Register         chan *Client
+	Unregister       chan *Client
+	Broadcast        chan *Message
+	Repo             repository.MessageRepo
+	PersistenceQueue chan *models.Message
+	Quit             chan struct{}
 }
 
 type Client struct {
@@ -51,16 +55,61 @@ type Client struct {
 	once        sync.Once
 }
 
-func NewHub() *Hub {
+func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup) *Hub {
 	log.Printf("Initializing new instance of HUB ....")
-	return &Hub{
-		AllClients: make(map[string]*Client),
-		Rooms:      make(map[string]map[*Client]bool),
-		History:    make(map[string][]Message),
-		Register:   make(chan *Client),
-		Unregister: make(chan *Client),
-		Broadcast:  make(chan *Message),
-		Quit:       make(chan struct{}),
+	h := &Hub{
+		Repo:             repo,
+		AllClients:       make(map[string]*Client),
+		Rooms:            make(map[string]map[*Client]bool),
+		PersistenceQueue: make(chan *models.Message, 1024),
+		Register:         make(chan *Client),
+		Unregister:       make(chan *Client),
+		Broadcast:        make(chan *Message),
+		Quit:             make(chan struct{}),
+	}
+
+	wg.Add(1)
+	go h.PersistMessageWorker(wg)
+
+	return h
+}
+func (h *Hub) PersistMessageWorker(wg *sync.WaitGroup) {
+
+	defer wg.Done()
+	for msg := range h.PersistenceQueue {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := h.Repo.Save(ctx, msg); err != nil {
+			log.Printf("Worker error: %v", err)
+		}
+		cancel()
+	}
+	log.Println("Worker: All messages persisted. Shutting down.")
+}
+
+func (h *Hub) replayHistory(c *Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	history, err := h.Repo.Fetch(ctx, c.RoomID, c.Name, 50, time.Now())
+	if err != nil {
+		log.Printf("Error fetching history: %v", err)
+		return
+	}
+
+	for i := len(history) - 1; i >= 0; i-- {
+		data, _ := json.Marshal(history[i])
+		c.Send <- data
+	}
+}
+
+func (m *Message) ToModel() *models.Message {
+	return &models.Message{
+		RoomID:    m.RoomID,
+		Sender:    m.Sender,
+		Target:    m.Target,
+		Content:   m.Content,
+		Type:      models.MessageType(m.Type),
+		Timestamp: m.Timestamp,
 	}
 }
 
@@ -81,7 +130,7 @@ func (h *Hub) broadcastUserList(roomId string) {
 		Sender:    "SYSTEM",
 		Content:   string(rawList),
 		Type:      TypeUserList,
-		Timestamp: time.Now().Unix(),
+		Timestamp: time.Now(),
 	}
 	payload, _ := json.Marshal(message)
 
@@ -98,11 +147,14 @@ func (h *Hub) broadcastUserList(roomId string) {
 
 func (h *Hub) cleanupClient(c *Client) {
 	c.once.Do(func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+
 		if room, ok := h.Rooms[c.RoomID]; ok {
 			delete(room, c)
 			if len(room) == 0 {
 				delete(h.Rooms, c.RoomID)
-				delete(h.History, c.RoomID)
+				log.Printf("[HUB] Room %s is now empty and removed ", c.RoomID)
 			}
 		}
 
@@ -112,11 +164,13 @@ func (h *Hub) cleanupClient(c *Client) {
 
 		c.Conn.Close()
 		close(c.Send)
-		log.Printf("[HUB] Cleanup complete for %s in %s", c.Name, c.RoomID)
+
+		log.Printf("[HUB] Cleanup complete for %s", c.Name)
 	})
 }
 
-func (h *Hub) Run() {
+func (h *Hub) Run(wg *sync.WaitGroup) {
+	defer wg.Done()
 	log.Println("[HUB] Main loop started. Listening for events...")
 	for {
 		select {
@@ -136,29 +190,12 @@ func (h *Hub) Run() {
 
 			if _, ok := h.Rooms[client.RoomID]; !ok {
 				h.Rooms[client.RoomID] = make(map[*Client]bool)
-				h.History[client.RoomID] = make([]Message, 0, 21)
 			}
-
-			log.Printf("[HUB] Replaying %d history messages to %s", len(h.History[client.RoomID]), client.Name)
-
-			h.mu.RLock()
-			historySnapshot := make([]Message, len(h.History[client.RoomID]))
-			copy(historySnapshot, h.History[client.RoomID])
-			h.mu.RUnlock()
-
-			go func(c *Client, history []Message) {
-				for _, msg := range history {
-					payload, _ := json.Marshal(msg)
-					select {
-					case c.Send <- payload:
-					case <-time.After(1 * time.Second):
-						return
-					}
-				}
-			}(client, historySnapshot)
 
 			h.AllClients[client.Name] = client
 			h.Rooms[client.RoomID][client] = true
+
+			go h.replayHistory(client)
 
 			log.Printf("[HUB] Successfully registered %s. Total active in room : %d", client.Name, len(h.Rooms[client.RoomID]))
 
@@ -167,7 +204,7 @@ func (h *Hub) Run() {
 				Sender:    "SYSTEM",
 				Content:   client.Name + " joined the chat",
 				Type:      TypeSystem,
-				Timestamp: time.Now().Unix(),
+				Timestamp: time.Now(),
 			}
 			joinPayload, _ := json.Marshal(joinMsg)
 			for c := range h.Rooms[client.RoomID] {
@@ -181,15 +218,15 @@ func (h *Hub) Run() {
 			h.broadcastUserList(client.RoomID)
 
 		case client := <-h.Unregister:
-			h.cleanupClient(client)
+			if clients, ok := h.Rooms[client.RoomID]; ok {
+				if _, ok := clients[client]; ok {
+					delete(clients, client)
+					close(client.Send)
 
-			if room, ok := h.Rooms[client.RoomID]; ok {
-				if len(room) == 0 {
-					delete(h.Rooms, client.RoomID)
-					delete(h.History, client.RoomID)
-					log.Printf("[HUB] Room %s is now empty and has been pruned", client.RoomID)
-				} else {
-					h.broadcastUserList(client.RoomID)
+					if len(clients) == 0 {
+						delete(h.Rooms, client.RoomID)
+						log.Printf("Room %s is now empty and removed from memory", client.RoomID)
+					}
 				}
 			}
 
@@ -206,16 +243,6 @@ func (h *Hub) Run() {
 						log.Printf("[HUB] WARNING: Client %s buffer full. Evicting slow consumer.", client.Name)
 						go func(c *Client) { h.Unregister <- c }(client)
 					}
-				}
-
-				if message.Type == TypeChat {
-					h.mu.Lock()
-					h.History[message.RoomID] = append(h.History[message.RoomID], *message)
-					if len(h.History[message.RoomID]) > 20 {
-						h.History[message.RoomID][0] = Message{}
-						h.History[message.RoomID] = h.History[message.RoomID][1:]
-					}
-					h.mu.Unlock()
 				}
 
 			case TypePrivate:
@@ -252,6 +279,9 @@ func (h *Hub) Run() {
 						sender.Send <- errPayload
 					}
 				}
+			}
+			if message.Type == TypeChat || message.Type == TypePrivate {
+				h.PersistenceQueue <- message.ToModel()
 			}
 		}
 	}

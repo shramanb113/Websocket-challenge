@@ -104,7 +104,7 @@ func (c *Client) ReadPump() {
 
 		payload.Sender = c.Name
 		payload.RoomID = c.RoomID
-		payload.Timestamp = time.Now().Unix()
+		payload.Timestamp = time.Now()
 
 		if payload.Type == TypeChat && len(payload.Content) > 0 && payload.Content[0] == '/' {
 			parts := strings.SplitN(payload.Content, " ", 2)

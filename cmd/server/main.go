@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -99,6 +100,8 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 }
 func main() {
 
+	wg := &sync.WaitGroup{}
+
 	cfg := config.Load()
 
 	pool, err := db.Connect(cfg.DatabaseURL)
@@ -109,12 +112,15 @@ func main() {
 	}
 	repoUser := repository.NewPoolConnection(pool)
 	repoRefreshToken := repository.NewRefreshTokenRepo(pool)
+	repoMessage := repository.NewMessagesRepo(pool)
 
 	tokenCleaner := tasks.NewTokenCleaner(repoRefreshToken)
 	tokenCleaner.Start()
 
-	h := chat.NewHub()
-	go h.Run()
+	h := chat.NewHub(repoMessage, wg)
+
+	wg.Add(1)
+	go h.Run(wg)
 
 	mux := http.NewServeMux()
 
@@ -138,6 +144,7 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	wg.Add(1)
 	go func() {
 		fmt.Println("🚀 Modular Server starting on :8080...")
 		if err := http.ListenAndServeTLS(":8080", certFile, keyFile, handlerWithCORS); err != nil {
@@ -151,10 +158,12 @@ func main() {
 
 	fmt.Println("\nShutdown signal received. Cleaning up...")
 	close(h.Quit)
+	close(h.PersistenceQueue)
+
+	wg.Wait()
 
 	fmt.Println("📦 Closing database connection pool...")
 	pool.Close()
 
-	time.Sleep(1 * time.Second)
 	fmt.Println("Graceful shutdown complete. Goodnight!")
 }

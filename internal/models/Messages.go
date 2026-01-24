@@ -17,9 +17,10 @@ const (
 
 type Message struct {
 	ID        uuid.UUID   `json:"id"`
-	RoomID    string      `json:"room_id"`
+	RoomID    string      `json:"roomID"`
 	Sender    string      `json:"sender"`
 	Content   string      `json:"content"`
 	Type      MessageType `json:"type"`
-	CreatedAt time.Time   `json:"createdAt"`
+	Target    string      `json:"target,omitempty"`
+	Timestamp time.Time   `json:"timestamp"`
 }
