@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"websocket-challenge/internal/repository"
 
 	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 )
 
 var r *regexp.Regexp = regexp.MustCompile("^[a-z0-9-_]+$")
@@ -110,6 +112,20 @@ func main() {
 		log.Fatal("Failed to connect to database:", err)
 		return
 	}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	if err = rdb.Ping(ctx).Err(); err != nil {
+		log.Fatalf("Failed to connect Redis Database .. Error : %s", err)
+	}
+
+	log.Println("✅ Connected to Redis")
+
 	repoUser := repository.NewPoolConnection(pool)
 	repoRefreshToken := repository.NewRefreshTokenRepo(pool)
 	repoMessage := repository.NewMessagesRepo(pool)
@@ -117,7 +133,7 @@ func main() {
 	tokenCleaner := tasks.NewTokenCleaner(repoRefreshToken)
 	tokenCleaner.Start()
 
-	h := chat.NewHub(repoMessage, wg)
+	h := chat.NewHub(repoMessage, wg, rdb)
 
 	wg.Add(1)
 	go h.Run(wg)

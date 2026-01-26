@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 )
 
 type MessageType string
@@ -43,6 +44,9 @@ type Message struct {
 	Target    string        `json:"target,omitempty"`
 	Timestamp time.Time     `json:"timestamp"`
 	Status    MessageStatus `json:"status"`
+
+	SenderServerID string `json:"sender_server_id"`
+	FromRedis      bool   `json:"-"`
 }
 
 type Hub struct {
@@ -55,6 +59,11 @@ type Hub struct {
 	Repo             repository.MessageRepo
 	PersistenceQueue chan *models.Message
 	Quit             chan struct{}
+
+	ServerID    string
+	RedisClient *redis.Client
+	RedisPubSub *redis.PubSub
+	ActiveSubs  map[string]bool
 }
 
 type Client struct {
@@ -68,8 +77,9 @@ type Client struct {
 	once        sync.Once
 }
 
-func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup) *Hub {
+func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) *Hub {
 	log.Printf("Initializing new instance of HUB ....")
+
 	h := &Hub{
 		Repo:             repo,
 		AllClients:       make(map[string]*Client),
@@ -79,13 +89,44 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup) *Hub {
 		Unregister:       make(chan *Client),
 		Broadcast:        make(chan *Message),
 		Quit:             make(chan struct{}),
+
+		ServerID:    uuid.New().String(),
+		RedisClient: rdb,
+		RedisPubSub: rdb.Subscribe(context.Background()),
+		ActiveSubs:  make(map[string]bool),
 	}
 
-	wg.Add(1)
+	wg.Add(2)
 	go h.PersistMessageWorker(wg)
+	go h.ListenToRedis(wg)
 
 	return h
 }
+
+func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	ch := h.RedisPubSub.Channel()
+
+	for message := range ch {
+
+		var m Message
+
+		if err := json.Unmarshal([]byte(message.Payload), &m); err != nil {
+			continue
+		}
+
+		if m.SenderServerID == h.ServerID {
+			continue
+		}
+
+		m.FromRedis = true
+
+		h.Broadcast <- &m
+
+	}
+}
+
 func (h *Hub) PersistMessageWorker(wg *sync.WaitGroup) {
 	defer wg.Done()
 	for msg := range h.PersistenceQueue {
