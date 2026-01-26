@@ -25,6 +25,7 @@ const (
 	TypeUserList MessageType = "user_list"
 	TypeAck      MessageType = "user_ack"
 	TypeTyping   MessageType = "user_typing"
+	TypeKick     MessageType = "user_kick"
 )
 
 type MessageStatus int
@@ -120,6 +121,18 @@ func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
 			continue
 		}
 
+		if m.Type == TypeKick {
+
+			h.mu.Lock()
+			if client, ok := h.AllClients[m.Sender]; ok {
+				log.Printf("[SIGNAL] Kicking local user %s due to global login", m.Sender)
+
+				go h.cleanupClient(client)
+			}
+			h.mu.Unlock()
+			continue
+		}
+
 		m.FromRedis = true
 
 		h.Broadcast <- &m
@@ -205,8 +218,11 @@ func (h *Hub) broadcastUserList(roomId string) {
 
 func (h *Hub) cleanupClient(c *Client) {
 	c.once.Do(func() {
+
+		ctx := context.Background()
+		h.RedisClient.SRem(ctx, "room:"+c.RoomID+":users", c.Name)
+
 		h.mu.Lock()
-		defer h.mu.Unlock()
 
 		if room, ok := h.Rooms[c.RoomID]; ok {
 			delete(room, c)
@@ -216,9 +232,23 @@ func (h *Hub) cleanupClient(c *Client) {
 			}
 		}
 
+		if len(h.Rooms[c.RoomID]) == 0 {
+			ctx := context.Background()
+
+			if err := h.RedisPubSub.Unsubscribe(ctx, c.RoomID); err != nil {
+				log.Fatalf("Glbal removal of room error : %s", err)
+			}
+			delete(h.ActiveSubs, c.RoomID)
+
+		}
+
 		if currentClient, ok := h.AllClients[c.Name]; ok && currentClient == c {
 			delete(h.AllClients, c.Name)
 		}
+
+		h.mu.Unlock()
+
+		go h.broadcastUserList(c.RoomID)
 
 		c.Conn.Close()
 		close(c.Send)
@@ -242,6 +272,10 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 			for _, client := range h.AllClients {
 				h.cleanupClient(client)
 			}
+
+			if err := h.RedisPubSub.Close(); err != nil {
+				log.Printf("[REDIS] Error closing PubSub: %v", err)
+			}
 			return
 
 		case client := <-h.Register:
@@ -251,16 +285,40 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 				h.cleanupClient(oldClient)
 			}
 
+			ctx := context.Background()
+
+			kickMsg := &Message{
+				Type:           TypeKick,
+				Sender:         client.Name,
+				SenderServerID: h.ServerID,
+			}
+
+			payload, _ := json.Marshal(kickMsg)
+
+			h.RedisClient.Publish(ctx, "global_signals", payload)
+
+			err := h.RedisClient.SAdd(ctx, "room:"+client.RoomID+":users", client.Name).Err()
+			if err != nil {
+				log.Printf("Redis SAdd error: %v", err)
+			}
+
+			h.mu.Lock()
+			if !h.ActiveSubs[client.RoomID] {
+				h.RedisPubSub.Subscribe(ctx, client.RoomID)
+				h.ActiveSubs[client.RoomID] = true
+			}
+
+			h.mu.Unlock()
+
 			if _, ok := h.Rooms[client.RoomID]; !ok {
 				h.Rooms[client.RoomID] = make(map[*Client]bool)
+				h.RedisPubSub.Subscribe(ctx, client.RoomID)
 			}
 
 			h.AllClients[client.Name] = client
 			h.Rooms[client.RoomID][client] = true
 
 			go h.replayHistory(client)
-
-			log.Printf("[HUB] Successfully registered %s. Total active in room : %d", client.Name, len(h.Rooms[client.RoomID]))
 
 			joinMsg := &Message{
 				RoomID:    client.RoomID,
@@ -269,14 +327,13 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 				Type:      TypeSystem,
 				Timestamp: time.Now(),
 			}
+
 			joinPayload, _ := json.Marshal(joinMsg)
-			for c := range h.Rooms[client.RoomID] {
-				select {
-				case c.Send <- joinPayload:
-				default:
-					continue
-				}
-			}
+
+			h.RedisClient.Publish(ctx, "global_signal", joinPayload)
+
+			count, _ := h.RedisClient.SCard(ctx, "room:"+client.RoomID+":users").Result()
+			log.Printf("[HUB] Registered %s. Global count: %d", client.Name, count)
 
 			h.broadcastUserList(client.RoomID)
 
