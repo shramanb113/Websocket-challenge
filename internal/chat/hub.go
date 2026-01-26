@@ -181,36 +181,26 @@ func (m *Message) ToModel() *models.Message {
 	}
 }
 
-func (h *Hub) getConnectedUsers(roomId string) []string {
-	users := make([]string, 0, len(h.Rooms[roomId]))
-	for name := range h.Rooms[roomId] {
-		users = append(users, name.Name)
-	}
-	return users
-}
-
 func (h *Hub) broadcastUserList(roomId string) {
-	users := h.getConnectedUsers(roomId)
+
+	ctx := context.Background()
+	users, err := h.RedisClient.SMembers(ctx, "room:"+roomId+":users").Result()
+	if err != nil {
+		log.Printf("Redis error fetching user list: %v", err)
+		return
+	}
+
 	rawList, _ := json.Marshal(users)
-
 	message := &Message{
-		RoomID:    roomId,
-		Sender:    "SYSTEM",
-		Content:   string(rawList),
-		Type:      TypeUserList,
-		Timestamp: time.Now(),
+		RoomID:         roomId,
+		Sender:         "SYSTEM",
+		Content:        string(rawList),
+		Type:           TypeUserList,
+		Timestamp:      time.Now(),
+		SenderServerID: h.ServerID,
 	}
-	payload, _ := json.Marshal(message)
 
-	if room, ok := h.Rooms[roomId]; ok {
-		for client := range room {
-			select {
-			case client.Send <- payload:
-			default:
-				go func(c *Client) { h.Unregister <- c }(client)
-			}
-		}
-	}
+	h.Broadcast <- message
 }
 
 func (h *Hub) cleanupClient(c *Client) {
@@ -238,12 +228,17 @@ func (h *Hub) cleanupClient(c *Client) {
 }
 
 func (h *Hub) Run(wg *sync.WaitGroup) {
+
 	defer wg.Done()
+
 	log.Println("[HUB] Main loop started. Listening for events...")
+
 	for {
 		select {
 		case <-h.Quit:
+
 			log.Println("[HUB] Quit signal received. Shutting down all client connections...")
+
 			for _, client := range h.AllClients {
 				h.cleanupClient(client)
 			}
