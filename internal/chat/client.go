@@ -109,6 +109,8 @@ func (c *Client) ReadPump() {
 
 		payload.Sender = c.Name
 		payload.RoomID = c.RoomID
+		payload.FromRedis = false
+		payload.SenderServerID = c.Hub.ServerID
 		payload.Timestamp = time.Now()
 
 		if payload.Type == TypeChat && len(payload.Content) > 0 && payload.Content[0] == '/' {

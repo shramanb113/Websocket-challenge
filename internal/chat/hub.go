@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -78,17 +79,21 @@ type Client struct {
 	once        sync.Once
 }
 
+func MyHandler(h *Hub) {
+	currentID := h.ServerID
+	fmt.Println("This server's ID is:", currentID)
+}
+
 func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) *Hub {
-	log.Printf("Initializing new instance of HUB ....")
 
 	h := &Hub{
 		Repo:             repo,
 		AllClients:       make(map[string]*Client),
 		Rooms:            make(map[string]map[*Client]bool),
 		PersistenceQueue: make(chan *models.Message, 1024),
-		Register:         make(chan *Client),
-		Unregister:       make(chan *Client),
-		Broadcast:        make(chan *Message),
+		Broadcast:        make(chan *Message, 2048),
+		Register:         make(chan *Client, 64),
+		Unregister:       make(chan *Client, 64),
 		Quit:             make(chan struct{}),
 
 		ServerID:    uuid.New().String(),
@@ -96,6 +101,7 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) 
 		RedisPubSub: rdb.Subscribe(context.Background()),
 		ActiveSubs:  make(map[string]bool),
 	}
+	log.Printf("[HUB] Main loop started on Server [%s]", h.ServerID)
 
 	wg.Add(2)
 	go h.PersistMessageWorker(wg)
@@ -107,6 +113,13 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) 
 func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	ctx := context.Background()
+
+	err := h.RedisPubSub.Subscribe(ctx, "global_signals")
+	if err != nil {
+		log.Printf("[REDIS ERROR] Could not subscribe to global_signals: %v", err)
+	}
+
 	ch := h.RedisPubSub.Channel()
 
 	for message := range ch {
@@ -114,10 +127,6 @@ func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
 		var m Message
 
 		if err := json.Unmarshal([]byte(message.Payload), &m); err != nil {
-			continue
-		}
-
-		if m.SenderServerID == h.ServerID {
 			continue
 		}
 
@@ -218,35 +227,33 @@ func (h *Hub) broadcastUserList(roomId string) {
 
 func (h *Hub) cleanupClient(c *Client) {
 	c.once.Do(func() {
-
 		ctx := context.Background()
+
 		h.RedisClient.SRem(ctx, "room:"+c.RoomID+":users", c.Name)
 
-		h.mu.Lock()
+		var shouldUnsubscribe bool
 
+		h.mu.Lock()
 		if room, ok := h.Rooms[c.RoomID]; ok {
 			delete(room, c)
 			if len(room) == 0 {
 				delete(h.Rooms, c.RoomID)
-				log.Printf("[HUB] Room %s is now empty and removed ", c.RoomID)
+				delete(h.ActiveSubs, c.RoomID)
+				shouldUnsubscribe = true
+				log.Printf("[HUB] Room %s is now empty locally.", c.RoomID)
 			}
-		}
-
-		if len(h.Rooms[c.RoomID]) == 0 {
-			ctx := context.Background()
-
-			if err := h.RedisPubSub.Unsubscribe(ctx, c.RoomID); err != nil {
-				log.Fatalf("Glbal removal of room error : %s", err)
-			}
-			delete(h.ActiveSubs, c.RoomID)
-
 		}
 
 		if currentClient, ok := h.AllClients[c.Name]; ok && currentClient == c {
 			delete(h.AllClients, c.Name)
 		}
-
 		h.mu.Unlock()
+
+		if shouldUnsubscribe {
+			if err := h.RedisPubSub.Unsubscribe(ctx, c.RoomID); err != nil {
+				log.Printf("[REDIS ERROR] Failed to unsubscribe from %s: %v", c.RoomID, err)
+			}
+		}
 
 		go h.broadcastUserList(c.RoomID)
 
@@ -295,7 +302,12 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 
 		case client := <-h.Register:
 			log.Printf("[HUB] Registration request: %s", client.Name)
-			if oldClient, ok := h.AllClients[client.Name]; ok {
+
+			h.mu.RLock()
+			oldClient, exists := h.AllClients[client.Name]
+			h.mu.RUnlock()
+
+			if exists {
 				log.Printf("[HUB] Overwriting existing session for user: %s", client.Name)
 				h.cleanupClient(oldClient)
 			}
@@ -323,15 +335,12 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 				h.ActiveSubs[client.RoomID] = true
 			}
 
-			h.mu.Unlock()
-
 			if _, ok := h.Rooms[client.RoomID]; !ok {
 				h.Rooms[client.RoomID] = make(map[*Client]bool)
-				h.RedisPubSub.Subscribe(ctx, client.RoomID)
 			}
-
 			h.AllClients[client.Name] = client
 			h.Rooms[client.RoomID][client] = true
+			h.mu.Unlock()
 
 			go h.replayHistory(client)
 
@@ -345,7 +354,7 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 
 			joinPayload, _ := json.Marshal(joinMsg)
 
-			h.RedisClient.Publish(ctx, "global_signal", joinPayload)
+			h.RedisClient.Publish(ctx, joinMsg.RoomID, joinPayload)
 
 			count, _ := h.RedisClient.SCard(ctx, "room:"+client.RoomID+":users").Result()
 			log.Printf("[HUB] Registered %s. Global count: %d", client.Name, count)
@@ -359,64 +368,103 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 			h.broadcastUserList(client.RoomID)
 
 		case message := <-h.Broadcast:
-			payload, _ := json.Marshal(message)
 
-			switch message.Type {
-			case TypeChat, TypeSystem, TypeUserList, TypeTyping:
-				log.Printf("[HUB] Broadcasting %s message from %s", message.Type, message.Sender)
-				for client := range h.Rooms[message.RoomID] {
+			if !message.FromRedis {
+				log.Printf("[INGEST] Local message from %s (Room: %s, Type: %s). Sending to cluster...",
+					message.Sender, message.RoomID, message.Type)
 
-					if message.Sender == client.Name {
+				message.SenderServerID = h.ServerID
+
+				payload, err := json.Marshal(message)
+				if err != nil {
+					log.Printf("[ERROR] Failed to marshal local message: %v", err)
+					continue
+				}
+
+				err = h.RedisClient.Publish(context.Background(), message.RoomID, payload).Err()
+				if err != nil {
+					log.Printf("[REDIS ERROR] Failed to publish message: %v", err)
+					continue
+				}
+
+				if message.Type == TypeChat || message.Type == TypePrivate || message.Type == TypeAck {
+					log.Printf("[DB-QUEUE] Queueing %s for persistence", message.Type)
+					h.PersistenceQueue <- message.ToModel()
+				}
+
+				continue
+			}
+
+			if message.FromRedis {
+				payload, err := json.Marshal(message)
+				if err != nil {
+					log.Printf("[ERROR] Failed to marshal message from redis: %v", err)
+					continue
+				}
+
+				switch message.Type {
+				case TypeChat, TypeUserList, TypeSystem, TypeTyping:
+					h.mu.RLock()
+					clients, roomExists := h.Rooms[message.RoomID]
+
+					if !roomExists {
+						h.mu.RUnlock()
+						log.Printf("[DELIVERY] No local clients in Room %s. Skipping delivery.", message.RoomID)
 						continue
 					}
 
-					select {
-					case client.Send <- payload:
-					default:
-						log.Printf("[HUB] WARNING: Client %s buffer full. Evicting slow consumer.", client.Name)
-						go func(c *Client) { h.Unregister <- c }(client)
-					}
-				}
-
-			case TypePrivate:
-				log.Printf("[HUB] Routing private message: %s -> %s (Room: %s)", message.Sender, message.Target, message.RoomID)
-
-				target, targetOk := h.AllClients[message.Target]
-				sender, senderOk := h.AllClients[message.Sender]
-
-				if targetOk && target.RoomID == message.RoomID {
-					select {
-					case target.Send <- payload:
-						log.Printf("[HUB] Private message delivered to %s", message.Target)
-					default:
-						go func(c *Client) { h.Unregister <- c }(target)
+					for client := range clients {
+						select {
+						case client.Send <- payload:
+						default:
+							log.Printf("[HUB] WARNING: Buffer full for %s. Evicting slow consumer.", client.Name)
+							go func(c *Client) { h.Unregister <- c }(client)
+						}
 					}
 
-					if senderOk && message.Target != message.Sender {
+					h.mu.RUnlock()
+
+				case TypePrivate:
+					h.mu.RLock()
+					target, targetOk := h.AllClients[message.Target]
+					sender, senderOk := h.AllClients[message.Sender]
+					h.mu.RUnlock()
+
+					if targetOk && target.RoomID == message.RoomID {
+						select {
+						case target.Send <- payload:
+							log.Printf("[PRIVATE] Delivered to target: %s", message.Target)
+
+						default:
+							go func(c *Client) { h.Unregister <- c }(target)
+						}
+					}
+
+					// multiple devices( have to reject the frontend from displaying this message in the screen and just listen)
+					if senderOk && sender.RoomID == message.RoomID {
 						select {
 						case sender.Send <- payload:
+							log.Printf("[PRIVATE] Delivered back to sender for sync: %s", message.Sender)
 						default:
 							go func(c *Client) { h.Unregister <- c }(sender)
 						}
 					}
-				} else {
-					log.Printf("[HUB] Private message failed: %s not in room %s", message.Target, message.RoomID)
-					if senderOk {
-						errorMsg := &Message{
-							Sender:  "SYSTEM",
-							Content: "User " + message.Target + " is not in this room.",
-							Type:    TypeSystem,
-							RoomID:  message.RoomID,
+
+				case TypeAck:
+					h.mu.RLock()
+					originalSender, ok := h.AllClients[message.Target]
+					h.mu.RUnlock()
+
+					if ok {
+						select {
+						case originalSender.Send <- payload:
+							log.Printf("[ACK] Status update sent to %s for Msg %s", message.Target, message.ID)
+						default:
+							go func(c *Client) { h.Unregister <- c }(originalSender)
 						}
-						errPayload, _ := json.Marshal(errorMsg)
-						sender.Send <- errPayload
 					}
+
 				}
-			case TypeAck:
-				log.Printf("[HUB] Ack received: Msg %s is now status %d", message.ID, message.Status)
-			}
-			if message.Type == TypeChat || message.Type == TypePrivate || message.Type == TypeAck {
-				h.PersistenceQueue <- message.ToModel()
 			}
 		}
 	}
