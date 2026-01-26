@@ -257,6 +257,21 @@ func (h *Hub) cleanupClient(c *Client) {
 	})
 }
 
+func (h *Hub) manageSubscription(roomID string) {
+	ctx := context.Background()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.Rooms[roomID]) == 0 {
+		if h.ActiveSubs[roomID] {
+			h.RedisPubSub.Unsubscribe(ctx, roomID)
+			delete(h.ActiveSubs, roomID)
+			log.Printf("[REDIS] Room %s is empty locally. Unsubscribed.", roomID)
+		}
+	}
+}
+
 func (h *Hub) Run(wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -338,17 +353,10 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 			h.broadcastUserList(client.RoomID)
 
 		case client := <-h.Unregister:
-			if clients, ok := h.Rooms[client.RoomID]; ok {
-				if _, ok := clients[client]; ok {
-					delete(clients, client)
-					close(client.Send)
-
-					if len(clients) == 0 {
-						delete(h.Rooms, client.RoomID)
-						log.Printf("Room %s is now empty and removed from memory", client.RoomID)
-					}
-				}
-			}
+			log.Printf("[HUB] Unregistering client: %s", client.Name)
+			h.cleanupClient(client)
+			h.manageSubscription(client.RoomID)
+			h.broadcastUserList(client.RoomID)
 
 		case message := <-h.Broadcast:
 			payload, _ := json.Marshal(message)
