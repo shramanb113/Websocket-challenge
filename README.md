@@ -170,6 +170,22 @@
 
 ---
 
+## Challenge 15: Distributed Scaling & Cluster Synchronization
+
+**Problem Statement:** Transitioning from a single-node server to a distributed cluster while maintaining global session integrity and message consistency.
+
+**The Struggle:** Traditional WebSockets are stateful and tied to a single memory space. Moving to a cluster creates **"State Fragmentation,"** where a user on _Server A_ cannot see a user on _Server B_, and **"Session Ghosting,"** where a user might be logged into multiple instances simultaneously without the system knowing.
+
+**The Win:** Engineered a **Redis-Backed Event Mesh** to synchronize the cluster state.
+
+- **Distributed Session Enforcement:** Implemented a global **"Kick Signal"** using Redis Pub/Sub. When a user registers on any node, the Hub broadcasts a `TypeKick` event with a unique `ServerID` tag. Remote nodes identify and terminate conflicting sessions, while the originating node intelligently ignores the signal to prevent self-disconnection.
+- **Pub/Sub Echo Architecture:** Re-engineered the message pipeline to use a **"Redis-First"** delivery model. Messages are published to Redis room-channels and ingested via a background `ListenToRedis` worker. This ensures that message order and "System Join" notifications are perfectly synchronized across all nodes in the cluster.
+
+- **Recursive Deadlock Prevention:** Optimized the Hub's concurrency model by implementing a **"Lock-Split"** registration flow. By decoupling session cleanup from state registration, the system handles rapid re-connections and cross-node handoffs without triggering mutex deadlocks or freezing the broadcast loop.
+- **Atomic History Replay:** Synchronized the transition from **"Static History"** (Database) to **"Live Stream"** (Redis) by implementing a calibrated background goroutine for history fetching. This eliminates the race condition where users might miss live messages during the millisecond gap of a room subscription.
+
+---
+
 ## ⚡ Technical Stack
 
 | Category        | Technology                                      |
@@ -302,7 +318,7 @@
 
 ### Phase 4: Horizontal Scaling & Distribution
 
-- [ ] **Challenge 15:** Distributed Pub/Sub (Redis Integration for Multi-Node).
+- [x] **Challenge 15:** Distributed Pub/Sub (Redis Integration for Multi-Node).
 - [ ] **Challenge 16:** Consistent Hashing (Sticky Session Management).
 - [ ] **Challenge 17:** Prometheus & Grafana Monitoring (Observability).
 - [ ] **Challenge 18:** Dockerization & K8s Readiness (Containerization).
