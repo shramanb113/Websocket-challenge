@@ -11,45 +11,12 @@ import (
 	"websocket-challenge/internal/middleware"
 	"websocket-challenge/internal/models"
 	"websocket-challenge/internal/repository"
+	"websocket-challenge/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 )
-
-type MessageType string
-
-const (
-	TypeChat     MessageType = "chat"
-	TypePrivate  MessageType = "private"
-	TypeSystem   MessageType = "system"
-	TypeUserList MessageType = "user_list"
-	TypeAck      MessageType = "user_ack"
-	TypeTyping   MessageType = "user_typing"
-	TypeKick     MessageType = "user_kick"
-)
-
-type MessageStatus int
-
-const (
-	StatusSaved MessageStatus = iota
-	StatusDelivered
-	StatusSeen
-)
-
-type Message struct {
-	ID        uuid.UUID     `json:"id"`
-	RoomID    string        `json:"roomID"`
-	Sender    string        `json:"sender"`
-	Content   string        `json:"content"`
-	Type      MessageType   `json:"type"`
-	Target    string        `json:"target,omitempty"`
-	Timestamp time.Time     `json:"timestamp"`
-	Status    MessageStatus `json:"status"`
-
-	SenderServerID string `json:"sender_server_id"`
-	FromRedis      bool   `json:"-"`
-}
 
 type Hub struct {
 	mu               sync.RWMutex
@@ -57,7 +24,7 @@ type Hub struct {
 	Rooms            map[string]map[*Client]bool
 	Register         chan *Client
 	Unregister       chan *Client
-	Broadcast        chan *Message
+	Broadcast        chan *types.Message
 	Repo             repository.MessageRepo
 	PersistenceQueue chan *models.Message
 	Quit             chan struct{}
@@ -91,7 +58,7 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) 
 		AllClients:       make(map[string]*Client),
 		Rooms:            make(map[string]map[*Client]bool),
 		PersistenceQueue: make(chan *models.Message, 1024),
-		Broadcast:        make(chan *Message, 2048),
+		Broadcast:        make(chan *types.Message, 2048),
 		Register:         make(chan *Client, 64),
 		Unregister:       make(chan *Client, 64),
 		Quit:             make(chan struct{}),
@@ -124,13 +91,13 @@ func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
 
 	for message := range ch {
 
-		var m Message
+		var m types.Message
 
 		if err := json.Unmarshal([]byte(message.Payload), &m); err != nil {
 			continue
 		}
 
-		if m.Type == TypeKick {
+		if m.Type == types.TypeAck {
 
 			h.mu.Lock()
 			if client, ok := h.AllClients[m.Sender]; ok {
@@ -190,7 +157,7 @@ func (h *Hub) replayHistory(c *Client) {
 	}
 }
 
-func (m *Message) ToModel() *models.Message {
+func MessageToModel(m *types.Message) *models.Message {
 	return &models.Message{
 		ID:        m.ID,
 		RoomID:    m.RoomID,
@@ -213,11 +180,11 @@ func (h *Hub) broadcastUserList(roomId string) {
 	}
 
 	rawList, _ := json.Marshal(users)
-	message := &Message{
+	message := &types.Message{
 		RoomID:         roomId,
 		Sender:         "SYSTEM",
 		Content:        string(rawList),
-		Type:           TypeUserList,
+		Type:           types.TypeUserList,
 		Timestamp:      time.Now(),
 		SenderServerID: h.ServerID,
 	}
@@ -314,8 +281,8 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 
 			ctx := context.Background()
 
-			kickMsg := &Message{
-				Type:           TypeKick,
+			kickMsg := &types.Message{
+				Type:           types.TypeKick,
 				Sender:         client.Name,
 				SenderServerID: h.ServerID,
 			}
@@ -344,11 +311,11 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 
 			go h.replayHistory(client)
 
-			joinMsg := &Message{
+			joinMsg := &types.Message{
 				RoomID:    client.RoomID,
 				Sender:    "SYSTEM",
 				Content:   client.Name + " joined the chat",
-				Type:      TypeSystem,
+				Type:      types.TypeSystem,
 				Timestamp: time.Now(),
 			}
 
@@ -387,9 +354,9 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 					continue
 				}
 
-				if message.Type == TypeChat || message.Type == TypePrivate || message.Type == TypeAck {
+				if message.Type == types.TypeChat || message.Type == types.TypePrivate || message.Type == types.TypeAck {
 					log.Printf("[DB-QUEUE] Queueing %s for persistence", message.Type)
-					h.PersistenceQueue <- message.ToModel()
+					h.PersistenceQueue <- MessageToModel(message)
 				}
 
 				continue
@@ -403,7 +370,7 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 				}
 
 				switch message.Type {
-				case TypeChat, TypeUserList, TypeSystem, TypeTyping:
+				case types.TypeChat, types.TypeUserList, types.TypeSystem, types.TypeTyping:
 					h.mu.RLock()
 					clients, roomExists := h.Rooms[message.RoomID]
 
@@ -424,7 +391,7 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 
 					h.mu.RUnlock()
 
-				case TypePrivate:
+				case types.TypePrivate:
 					h.mu.RLock()
 					target, targetOk := h.AllClients[message.Target]
 					sender, senderOk := h.AllClients[message.Sender]
@@ -450,7 +417,7 @@ func (h *Hub) Run(wg *sync.WaitGroup) {
 						}
 					}
 
-				case TypeAck:
+				case types.TypeAck:
 					h.mu.RLock()
 					originalSender, ok := h.AllClients[message.Target]
 					h.mu.RUnlock()
