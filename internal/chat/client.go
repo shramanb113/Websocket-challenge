@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"websocket-challenge/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -86,8 +87,8 @@ func (c *Client) ReadPump() {
 		// Rate Limiter
 		if !c.Limiter.Allow() {
 			if time.Since(c.LastWarning) > 3*time.Second {
-				warning, _ := json.Marshal(&Message{
-					Type: TypeSystem, Sender: "SYSTEM", Content: "⚠️ Rate limit exceeded.", RoomID: c.RoomID,
+				warning, _ := json.Marshal(&types.Message{
+					Type: types.TypeSystem, Sender: "SYSTEM", Content: "⚠️ Rate limit exceeded.", RoomID: c.RoomID,
 				})
 				select {
 				case c.Send <- warning:
@@ -98,12 +99,12 @@ func (c *Client) ReadPump() {
 			continue
 		}
 
-		payload := &Message{}
+		payload := &types.Message{}
 		if err := json.Unmarshal(message, payload); err != nil {
 			continue
 		}
 
-		if payload.ID == uuid.Nil && payload.Type != TypeAck {
+		if payload.ID == uuid.Nil && payload.Type != types.TypeAck {
 			payload.ID = uuid.New()
 		}
 
@@ -113,7 +114,7 @@ func (c *Client) ReadPump() {
 		payload.SenderServerID = c.Hub.ServerID
 		payload.Timestamp = time.Now()
 
-		if payload.Type == TypeChat && len(payload.Content) > 0 && payload.Content[0] == '/' {
+		if payload.Type == types.TypeChat && len(payload.Content) > 0 && payload.Content[0] == '/' {
 			parts := strings.SplitN(payload.Content, " ", 2)
 			cmd := parts[0]
 			rest := ""
@@ -128,8 +129,8 @@ func (c *Client) ReadPump() {
 					content = "Commands: /shrug, /lenny, /tableflip, /unflip, /bear, /disapprove, /hug, /dance, /sparkles, /flex, /cry, /coffee, /fix, /deploy, /ping"
 				}
 
-				resp, _ := json.Marshal(&Message{
-					Type: TypeSystem, Sender: "SYSTEM", Content: content, RoomID: c.RoomID,
+				resp, _ := json.Marshal(&types.Message{
+					Type: types.TypeSystem, Sender: "SYSTEM", Content: content, RoomID: c.RoomID,
 				})
 				c.Send <- resp
 				continue
