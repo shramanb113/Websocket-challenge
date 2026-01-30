@@ -75,11 +75,60 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) 
 	}
 	log.Printf("[HUB] Main loop started on Server [%s]", h.ServerID)
 
-	wg.Add(2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	err := rdb.Ping(ctx).Err()
+	cancel()
+
+	if err == nil {
+		h.RedisOnline.Store(true)
+	}
+
+	log.Printf("[HUB] Main loop started on Server [%s] | Redis Online: %v", h.ServerID, h.RedisOnline.Load())
+
+	wg.Add(3)
 	go h.PersistMessageWorker(wg)
 	go h.ListenToRedis(wg)
+	go func() {
+		defer wg.Done()
+		h.IsOnline()
+	}()
 
 	return h
+}
+
+func (h *Hub) IsOnline() {
+	ticker := time.NewTicker(time.Second * 5)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+			err := h.RedisClient.Ping(ctx).Err()
+			cancel()
+			if err != nil {
+				if h.RedisOnline.Load() {
+					log.Println("🚨 REDIS OFFLINE: Hub switching to Standalone Fallback")
+					h.RedisOnline.Store(false)
+				}
+			} else {
+				if !h.RedisOnline.Load() {
+					log.Println("✅ REDIS ONLINE: Hub resuming Cluster Mode")
+					h.RedisOnline.Store(true)
+					err := h.RedisPubSub.Subscribe(context.Background(), "global_signals")
+					if err != nil {
+						log.Printf("[REDIS ERROR] Could not subscribe to global_signals: %v", err)
+					}
+
+					for roomID := range h.ActiveSubs {
+						h.RedisPubSub.Subscribe(context.Background(), roomID)
+					}
+				}
+			}
+		case <-h.Quit:
+			return
+		}
+	}
 }
 
 func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
