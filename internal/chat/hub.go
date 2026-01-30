@@ -39,6 +39,8 @@ type Hub struct {
 	Ring *hashing.Ring
 
 	RedisOnline atomic.Bool
+
+	LastSeen map[string]time.Time
 }
 
 type Client struct {
@@ -85,6 +87,8 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client, 
 		Ring: NewConsistentHashing(50),
 
 		RedisOnline: atomic.Bool{},
+
+		LastSeen: make(map[string]time.Time),
 	}
 	log.Printf("[HUB] Main loop started on Server [%s]", h.ServerID)
 
@@ -182,9 +186,7 @@ func (h *Hub) AnnounceServerLeave() {
 func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	ctx := context.Background()
-
-	err := h.RedisPubSub.Subscribe(ctx, "global_signals")
+	err := h.RedisPubSub.Subscribe(context.Background(), "global_signals")
 	if err != nil {
 		log.Printf("[REDIS ERROR] Could not subscribe to global_signals: %v", err)
 	}
