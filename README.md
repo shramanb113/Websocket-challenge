@@ -334,7 +334,7 @@
 ### Phase 4: Horizontal Scaling & Distribution
 
 - [x] **Challenge 15:** Distributed Pub/Sub (Redis Integration for Multi-Node).
-- [ ] **Challenge 16:** Consistent Hashing (Sticky Session Management).
+- [x] **Challenge 16:** Consistent Hashing (Sticky Session Management).
 - [ ] **Challenge 17:** Prometheus & Grafana Monitoring (Observability).
 - [ ] **Challenge 18:** Dockerization & K8s Readiness (Containerization).
 
