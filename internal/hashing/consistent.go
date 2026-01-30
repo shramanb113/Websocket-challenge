@@ -9,9 +9,9 @@ import (
 )
 
 type Ring struct {
-	nodes    []uint32
-	registry map[uint32]string
-	replicas int
+	Nodes    []uint32
+	Registry map[uint32]string
+	Replicas int
 	mu       sync.RWMutex
 }
 
@@ -19,37 +19,66 @@ func hash(key string) uint32 {
 	return crc32.ChecksumIEEE([]byte(key))
 }
 
-func (r *Ring) Add(node string) {
+func (r *Ring) Add(node string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for i := range r.replicas {
+
+	firstIdentity := node + "#0"
+	if _, exists := r.Registry[hash(firstIdentity)]; exists {
+		return false
+	}
+
+	for i := 0; i < r.Replicas; i++ {
 		identity := node + "#" + strconv.Itoa(i)
 		hashedIdentity := hash(identity)
-		if _, ok := r.registry[hashedIdentity]; !ok {
-			r.registry[hashedIdentity] = node
-			r.nodes = append(r.nodes, hashedIdentity)
-		}
+		r.Registry[hashedIdentity] = node
+		r.Nodes = append(r.Nodes, hashedIdentity)
 	}
-	slices.Sort(r.nodes)
+
+	slices.Sort(r.Nodes)
+	return true
 }
 
 func (r *Ring) Get(key string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if len(r.nodes) == 0 {
+	if len(r.Nodes) == 0 {
 		return ""
 	}
 
 	userHashed := hash(key)
 
-	idx := sort.Search(len(r.nodes), func(i int) bool {
-		return r.nodes[i] >= userHashed
+	idx := sort.Search(len(r.Nodes), func(i int) bool {
+		return r.Nodes[i] >= userHashed
 	})
 
-	if idx == len(r.nodes) {
+	if idx == len(r.Nodes) {
 		idx = 0
 	}
 
-	return r.registry[r.nodes[idx]]
+	return r.Registry[r.Nodes[idx]]
+}
+
+func (r *Ring) Remove(node string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.Registry[hash(node+"#0")]; !exists {
+		return false
+	}
+
+	for i := 0; i < r.Replicas; i++ {
+		h := hash(node + "#" + strconv.Itoa(i))
+		delete(r.Registry, h)
+
+		for j := 0; j < len(r.Nodes); j++ {
+			if r.Nodes[j] == h {
+				r.Nodes = append(r.Nodes[:j], r.Nodes[j+1:]...)
+				break
+			}
+		}
+
+	}
+	return true
 }
