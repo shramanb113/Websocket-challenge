@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -75,13 +74,19 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 
 		targetServerID := h.Ring.Get(user.ID.String())
 		if targetServerID != h.ServerID {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusLocked) // Or another custom code
-			json.NewEncoder(w).Encode(map[string]string{
-				"status": "redirect",
-				"target": targetServerID,
-			})
-			return
+
+			fromServer := r.URL.Query().Get("from")
+
+			if fromServer == targetServerID {
+				log.Printf("[LOOP PROTECT] Ring conflict for %s. Accepting locally.", user.ID)
+			} else {
+				log.Printf("[REDIRECT] User %s -> %s", user.ID, targetServerID)
+				targetURL := fmt.Sprintf("ws://%s/ws?u=%s&from=%s", targetServerID, user.ID, h.ServerID)
+
+				w.Header().Set("Location", targetURL)
+				w.WriteHeader(http.StatusTemporaryRedirect)
+				return
+			}
 		}
 
 		roomParam := r.URL.Query().Get("room")

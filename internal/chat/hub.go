@@ -135,6 +135,16 @@ func (h *Hub) IsOnline() {
 			} else {
 				if h.RedisOnline.Load() {
 					h.announceServerAdd()
+					h.mu.Lock()
+					now := time.Now()
+					for serverID, lastTime := range h.LastSeen {
+						if now.Sub(lastTime) > 20*time.Second {
+							log.Printf("[WATCHER] Server %s timed out. Removing from Ring.", serverID)
+							h.Ring.Remove(serverID)
+							delete(h.LastSeen, serverID)
+						}
+					}
+					h.mu.Unlock()
 				}
 				if !h.RedisOnline.Load() {
 					log.Println("✅ REDIS ONLINE: Hub resuming Cluster Mode")
@@ -206,6 +216,9 @@ func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
 				added := h.Ring.Add(newID)
 				if added {
 					log.Printf("[RING] Added NEW remote server: %s", newID)
+					h.mu.Lock()
+					h.LastSeen[newID] = time.Now()
+					h.mu.Unlock()
 					h.announceServerAdd()
 				}
 			}
