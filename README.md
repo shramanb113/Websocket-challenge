@@ -186,6 +186,21 @@
 
 ---
 
+## Challenge 16: Intelligent Routing & Self-Healing Ring
+
+**Problem Statement:** Solving the **"Blind Redirect"** problem and ensuring cluster resilience when nodes fail without notice (**Ghost Servers**).
+
+**The Struggle:** In a distributed environment, a Load Balancer often sends users to random nodes. Without a routing strategy, users become scattered, forcing massive Redis overhead. Furthermore, if a server crashes, the cluster remains **"blind,"** continuing to route users to a dead IP address, leading to a total breakdown of the connection flow.
+
+**The Win:** Engineered a **Consistent Hashing Circular Buffer** with an **Active Watcher** mechanism.
+
+- **Deterministic User Mapping:** Implemented a **Consistent Hashing Ring** with **VNode (Virtual Node)** support. By mapping `UserID` to a specific point on a $360^\circ$ hash circle, the system ensures that a user is always routed to the same primary node. This drastically reduces "cross-talk" and maximizes local memory efficiency.
+- **Automated "Bouncer" Logic:** Developed an intelligent WebSocket middleware that intercepts connections **before** the `HTTP Upgrade`. If the Ring determines a user belongs on a peer node, the server issues a **307 Temporary Redirect** with a `from` tracking parameter, guiding the client to the correct destination without manual intervention.
+- **Ghost Server Pruning (The Watcher):** Solved the **"Sudden Death"** scenario by implementing a **TTL-based Heartbeat Ledger**. Each node broadcasts a `JOIN` signal every **5 seconds**. A background **Watcher** goroutine monitors the `LastSeen` ledger; if a peer remains silent for **>20 seconds**, it is atomically purged from the Ring, and its traffic is instantly redistributed to healthy neighbors.
+- **Redirect Loop Shield:** Neutralized **"Ping-Pong"** race conditions during cluster re-syncs. By analyzing the `from` query parameter, the server detects if a user is being bounced between nodes with conflicting Ring states. In these edge cases, the server **breaks the cycle** by accepting the connection locally, ensuring 100% uptime during node transitions.
+
+---
+
 ## ⚡ Technical Stack
 
 | Category        | Technology                                      |
