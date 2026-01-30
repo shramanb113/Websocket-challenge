@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"websocket-challenge/internal/middleware"
@@ -33,6 +34,8 @@ type Hub struct {
 	RedisClient *redis.Client
 	RedisPubSub *redis.PubSub
 	ActiveSubs  map[string]bool
+
+	RedisOnline atomic.Bool
 }
 
 type Client struct {
@@ -67,6 +70,8 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) 
 		RedisClient: rdb,
 		RedisPubSub: rdb.Subscribe(context.Background()),
 		ActiveSubs:  make(map[string]bool),
+
+		RedisOnline: atomic.Bool{},
 	}
 	log.Printf("[HUB] Main loop started on Server [%s]", h.ServerID)
 
