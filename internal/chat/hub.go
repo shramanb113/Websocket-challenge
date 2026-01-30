@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"websocket-challenge/internal/hashing"
 	"websocket-challenge/internal/middleware"
 	"websocket-challenge/internal/models"
 	"websocket-challenge/internal/repository"
@@ -35,6 +37,8 @@ type Hub struct {
 	RedisPubSub *redis.PubSub
 	ActiveSubs  map[string]bool
 
+	Ring *hashing.Ring
+
 	RedisOnline atomic.Bool
 }
 
@@ -47,6 +51,14 @@ type Client struct {
 	Limiter     *middleware.RateLimiter
 	LastWarning time.Time
 	once        sync.Once
+}
+
+func NewConsistentHashing(replicas int) *hashing.Ring {
+	return &hashing.Ring{
+		Nodes:    make([]uint32, 0),
+		Registry: make(map[uint32]string),
+		Replicas: replicas,
+	}
 }
 
 func MyHandler(h *Hub) {
@@ -71,9 +83,13 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) 
 		RedisPubSub: rdb.Subscribe(context.Background()),
 		ActiveSubs:  make(map[string]bool),
 
+		Ring: NewConsistentHashing(50),
+
 		RedisOnline: atomic.Bool{},
 	}
 	log.Printf("[HUB] Main loop started on Server [%s]", h.ServerID)
+
+	h.Ring.Add(h.ServerID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	err := rdb.Ping(ctx).Err()
@@ -92,6 +108,8 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) 
 		defer wg.Done()
 		h.IsOnline()
 	}()
+
+	h.announceServerAdd()
 
 	return h
 }
@@ -121,7 +139,10 @@ func (h *Hub) IsOnline() {
 					}
 
 					for roomID := range h.ActiveSubs {
-						h.RedisPubSub.Subscribe(context.Background(), roomID)
+						err := h.RedisPubSub.Subscribe(context.Background(), roomID)
+						if err != nil {
+							log.Printf("[REDIS ERROR] Could not subscribe to roomID %s : %v", roomID, err)
+						}
 					}
 				}
 			}
@@ -129,6 +150,18 @@ func (h *Hub) IsOnline() {
 			return
 		}
 	}
+}
+
+func (h *Hub) announceServerAdd() {
+	m := &types.Message{
+		Sender:  "SYSTEM",
+		Content: "JOIN:" + h.ServerID,
+		Type:    types.TypeSystem,
+	}
+
+	messageBytes, _ := json.Marshal(m)
+
+	h.RedisClient.Publish(context.Background(), "global_signals", messageBytes)
 }
 
 func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
@@ -148,6 +181,17 @@ func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
 		var m types.Message
 
 		if err := json.Unmarshal([]byte(message.Payload), &m); err != nil {
+			continue
+		}
+
+		if newID, found := strings.CutPrefix(m.Content, "JOIN:"); found {
+			if newID != h.ServerID {
+				added := h.Ring.Add(newID)
+				if added {
+					log.Printf("[RING] Added NEW remote server: %s", newID)
+					h.announceServerAdd()
+				}
+			}
 			continue
 		}
 
