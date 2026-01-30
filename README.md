@@ -1,6 +1,6 @@
 # 🚀 GoHub: 20-Step Distributed Messaging Engine
 
-> **Status: Challenge 6/20 Complete** > A high-concurrence, thread-safe real-time communication server built with **Go** and **Gorilla WebSockets**. Demonstrating advanced systems engineering: non-blocking backpressure, graceful termination, and distributed command parsing.
+> **Status: Challenge 16/20 Complete** > A high-concurrence, thread-safe real-time communication server built with **Go** and **Gorilla WebSockets**. Demonstrating advanced systems engineering: non-blocking backpressure, graceful termination, and distributed command parsing.
 
 ---
 
