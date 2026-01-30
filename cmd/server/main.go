@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -72,6 +73,17 @@ func serveWS(h *chat.Hub) http.HandlerFunc {
 			return
 		}
 
+		targetServerID := h.Ring.Get(user.ID.String())
+		if targetServerID != h.ServerID {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusLocked) // Or another custom code
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "redirect",
+				"target": targetServerID,
+			})
+			return
+		}
+
 		roomParam := r.URL.Query().Get("room")
 		santizedRoom := sanitize(roomParam)
 		if santizedRoom == "" {
@@ -133,7 +145,18 @@ func main() {
 	tokenCleaner := tasks.NewTokenCleaner(repoRefreshToken)
 	tokenCleaner.Start()
 
-	h := chat.NewHub(repoMessage, wg, rdb)
+	port := cfg.Port
+	if port == "" {
+		port = "8080"
+	}
+
+	host := cfg.Host
+	if host == "" {
+		host = "localhost"
+	}
+
+	publicAddr := fmt.Sprintf("%s:%s", host, port)
+	h := chat.NewHub(repoMessage, wg, rdb, publicAddr)
 
 	wg.Add(1)
 	go h.Run(wg)

@@ -16,7 +16,6 @@ import (
 	"websocket-challenge/internal/repository"
 	"websocket-challenge/internal/types"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 )
@@ -66,7 +65,7 @@ func MyHandler(h *Hub) {
 	fmt.Println("This server's ID is:", currentID)
 }
 
-func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) *Hub {
+func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client, publicAddr string) *Hub {
 
 	h := &Hub{
 		Repo:             repo,
@@ -78,7 +77,7 @@ func NewHub(repo repository.MessageRepo, wg *sync.WaitGroup, rdb *redis.Client) 
 		Unregister:       make(chan *Client, 64),
 		Quit:             make(chan struct{}),
 
-		ServerID:    uuid.New().String(),
+		ServerID:    publicAddr,
 		RedisClient: rdb,
 		RedisPubSub: rdb.Subscribe(context.Background()),
 		ActiveSubs:  make(map[string]bool),

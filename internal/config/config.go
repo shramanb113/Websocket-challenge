@@ -13,6 +13,7 @@ type Config struct {
 	Port        string
 	Env         string
 	AuthKey     string
+	Host        string
 }
 
 func Load() *Config {
@@ -30,6 +31,7 @@ func Load() *Config {
 		Port:        getEnv("PORT", "8080"),
 		Env:         getEnv("APP_ENV", "development"),
 		AuthKey:     getEnv("AUTH_KEY", ""),
+		Host:        getEnv("HOST", "localhost"),
 	}
 
 	log.Printf("[CONFIG] Environment: %s", cfg.Env)
