@@ -186,7 +186,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		fmt.Println("🚀 Modular Server starting on :8080...")
-		if err := http.ListenAndServeTLS(":8080", certFile, keyFile, handlerWithCORS); err != nil {
+		if err := http.ListenAndServeTLS(":"+port, certFile, keyFile, handlerWithCORS); err != nil {
 			if err != http.ErrServerClosed {
 				log.Fatalf("ListenAndServe: %v", err)
 			}
@@ -195,14 +195,17 @@ func main() {
 
 	<-stop
 
+	h.AnnounceServerLeave()
+
 	fmt.Println("\nShutdown signal received. Cleaning up...")
+
 	close(h.Quit)
-	close(h.PersistenceQueue)
 
 	wg.Wait()
 
 	fmt.Println("📦 Closing database connection pool...")
 	pool.Close()
+	rdb.Close()
 
 	fmt.Println("Graceful shutdown complete. Goodnight!")
 }

@@ -129,9 +129,13 @@ func (h *Hub) IsOnline() {
 					h.RedisOnline.Store(false)
 				}
 			} else {
+				if h.RedisOnline.Load() {
+					h.announceServerAdd()
+				}
 				if !h.RedisOnline.Load() {
 					log.Println("✅ REDIS ONLINE: Hub resuming Cluster Mode")
 					h.RedisOnline.Store(true)
+					h.announceServerAdd()
 					err := h.RedisPubSub.Subscribe(context.Background(), "global_signals")
 					if err != nil {
 						log.Printf("[REDIS ERROR] Could not subscribe to global_signals: %v", err)
@@ -144,6 +148,7 @@ func (h *Hub) IsOnline() {
 						}
 					}
 				}
+
 			}
 		case <-h.Quit:
 			return
@@ -158,6 +163,17 @@ func (h *Hub) announceServerAdd() {
 		Type:    types.TypeSystem,
 	}
 
+	messageBytes, _ := json.Marshal(m)
+
+	h.RedisClient.Publish(context.Background(), "global_signals", messageBytes)
+}
+
+func (h *Hub) AnnounceServerLeave() {
+	m := &types.Message{
+		Sender:  "SYSTEM",
+		Content: "LEAVE:" + h.ServerID,
+		Type:    types.TypeSystem,
+	}
 	messageBytes, _ := json.Marshal(m)
 
 	h.RedisClient.Publish(context.Background(), "global_signals", messageBytes)
@@ -189,6 +205,15 @@ func (h *Hub) ListenToRedis(wg *sync.WaitGroup) {
 				if added {
 					log.Printf("[RING] Added NEW remote server: %s", newID)
 					h.announceServerAdd()
+				}
+			}
+			continue
+		}
+		if newID, found := strings.CutPrefix(m.Content, "LEAVE:"); found {
+			if newID != h.ServerID {
+				removed := h.Ring.Remove(newID)
+				if removed {
+					log.Printf("[RING] Removed existing remote server: %s", newID)
 				}
 			}
 			continue
